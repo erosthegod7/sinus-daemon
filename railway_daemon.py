@@ -45,6 +45,7 @@ SYMBOL = os.environ.get("SINUS_SYMBOL", "SPY")
 YEARS = float(os.environ.get("SINUS_YEARS", "2"))
 EPOCHS = int(os.environ.get("SINUS_TFT_EPOCHS", "12"))
 MIN_SESSIONS = int(os.environ.get("SINUS_MIN_SESSIONS", "100"))
+MAX_SESSIONS = int(os.environ.get("SINUS_MAX_SESSIONS", "300"))
 CACHE_PQ = os.path.join(VOL, f"{SYMBOL.lower()}_1min_cache.parquet")
 CACHE_CSV = os.path.join(VOL, f"{SYMBOL.lower()}_1min_cache.csv.gz")
 
@@ -316,6 +317,18 @@ def main() -> int:
 
     n_sess = spot_df["ts"].dt.normalize().nunique()
     _log(f"{len(spot_df):,} bars across {n_sess} sessions")
+
+    # Trim to the most recent MAX_SESSIONS. The TFT sequence tensor is
+    # rows x lookback x features in float32 — at 500 sessions and a 60-bar lookback that is
+    # ~7 GB in ONE array, which no reasonable container survives. 300 sessions is ample for a
+    # hyper-parameter search and keeps the tensor near 4 GB. Recent sessions are also the more
+    # relevant ones. Raise SINUS_MAX_SESSIONS only alongside more container memory.
+    if n_sess > MAX_SESSIONS:
+        days = sorted(spot_df["ts"].dt.normalize().unique())[-MAX_SESSIONS:]
+        spot_df = spot_df[spot_df["ts"].dt.normalize().isin(days)].reset_index(drop=True)
+        n_sess = MAX_SESSIONS
+        _log(f"trimmed to the most recent {MAX_SESSIONS} sessions ({len(spot_df):,} bars) "
+             f"to keep the sequence tensor inside container memory")
     if n_sess < MIN_SESSIONS:
         _log(f"FATAL only {n_sess} sessions, minimum is {MIN_SESSIONS}. A search on this little "
              f"data finds luck, not edge. Lower SINUS_MIN_SESSIONS only if you know why.")
@@ -344,4 +357,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
