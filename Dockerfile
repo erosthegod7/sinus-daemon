@@ -11,6 +11,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY sinus.py sinus_search.py sinus_daemon.py railway_daemon.py ./
 
 ENV PYTHONUNBUFFERED=1 SINUS_VOLUME=/data
-VOLUME ["/data"]
 
 CMD ["python", "railway_daemon.py"]
