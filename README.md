@@ -52,3 +52,4 @@ The search explores the CONFIGURATION space, which is effectively unbounded — 
 always has work. It does NOT extract more signal from a fixed dataset than the dataset
 contains. Expect fast improvement, then a plateau. The daemon prints a notice after 50 trials
 without a promotion; when you see it, more compute is not the answer. More sessions are.
+
