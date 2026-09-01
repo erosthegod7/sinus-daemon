@@ -46,6 +46,9 @@ YEARS = float(os.environ.get("SINUS_YEARS", "2"))
 EPOCHS = int(os.environ.get("SINUS_TFT_EPOCHS", "12"))
 MIN_SESSIONS = int(os.environ.get("SINUS_MIN_SESSIONS", "100"))
 MAX_SESSIONS = int(os.environ.get("SINUS_MAX_SESSIONS", "300"))
+PRUNE = os.environ.get("SINUS_PRUNE", "1") == "1"
+PRUNE_PCT = float(os.environ.get("SINUS_PRUNE_PERCENTILE", "60"))
+SCREEN_ROUNDS = int(os.environ.get("SINUS_SCREEN_ROUNDS", "150"))
 CACHE_PQ = os.path.join(VOL, f"{SYMBOL.lower()}_1min_cache.parquet")
 CACHE_CSV = os.path.join(VOL, f"{SYMBOL.lower()}_1min_cache.csv.gz")
 
@@ -305,7 +308,8 @@ def start_http_server(work_dir: str, port: int) -> None:
 
 def main() -> int:
     _log("SINUS daemon starting")
-    _log(f"volume={VOL} symbol={SYMBOL} epochs/trial={EPOCHS}")
+    _log(f"volume={VOL} symbol={SYMBOL} epochs/trial={EPOCHS} "
+         f"prune={'on p%.0f' % PRUNE_PCT if PRUNE else 'off'}")
     os.makedirs(VOL, exist_ok=True)
 
     try:
@@ -342,7 +346,8 @@ def main() -> int:
 
     while True:                                        # outer loop: survive an unexpected crash
         try:
-            sd.search_forever(spot_df, work_dir=work, tft_epochs=EPOCHS)
+            sd.search_forever(spot_df, work_dir=work, tft_epochs=EPOCHS, prune=PRUNE,
+                              prune_percentile=PRUNE_PCT, screen_rounds=SCREEN_ROUNDS)
             _log("search_forever returned (stop requested) — exiting")
             return 0
         except KeyboardInterrupt:
