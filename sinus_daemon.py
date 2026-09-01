@@ -52,6 +52,7 @@ from sinus import (FeaturePipeline, PipelineConfig, TrainingBundle, CoreModeling
                    EngineConfig, EnsembleFusionEngine, FusionConfig, HORIZONS,
                    fetch_snapshot_ladder, market_state_from_polygon)
 from sinus_search import sample_config, _apply, score_predictions
+from sinus_gitstore import GitStore, SAVE_EVERY
 
 LEADERBOARD = "leaderboard.csv"
 CHAMPION = "champion"
@@ -118,6 +119,8 @@ def search_forever(spot_df: pd.DataFrame, work_dir: str, chain_df=None, tft_epoc
     a plateau means the data is exhausted, and continuing is burning compute for nothing.
     """
     os.makedirs(work_dir, exist_ok=True)
+    git = GitStore(work_dir)                          # no-op if SINUS_GIT_REPO/TOKEN unset
+    git.pull_champion()                               # start from whatever the OTHER node found
     board = _load_board(work_dir)
     start_trial = int(board["trial"].max()) + 1 if len(board) and "trial" in board else 0
     rng = np.random.default_rng(seed if seed is not None else start_trial * 7919 + 13)
@@ -179,6 +182,9 @@ def search_forever(spot_df: pd.DataFrame, work_dir: str, chain_df=None, tft_epoc
                     _promote(work_dir, cand_dir, p, vs, ts_, trial)
                     champ = ts_["score"]
                     since_promotion = 0
+                    git.push_champion(os.path.join(work_dir, CHAMPION),
+                                      json.load(open(os.path.join(work_dir, CHAMPION, "champion.json"))),
+                                      min_improvement)
                 else:
                     print(f"[daemon] trial {trial} beat validation but NOT test "
                           f"({ts_['score']:.4f} vs champion {champ:.4f}) — not promoted. "
@@ -197,6 +203,8 @@ def search_forever(spot_df: pd.DataFrame, work_dir: str, chain_df=None, tft_epoc
         rec["seconds"] = round(time.time() - t0, 1)
         rows.append(rec)
         _save_board(work_dir, pd.DataFrame(rows))
+        if (trial + 1) % SAVE_EVERY == 0:
+            git.push_leaderboard(pd.DataFrame(rows), trial)
         el = (time.time() - t_start) / 3600.0
         print(f"[daemon] trial {trial:>4}  score {rec.get('score', float('nan')):.4f}  "
               f"best {best_val:.4f}  champ {champ if champ is not None else float('nan'):.4f}  "
@@ -210,6 +218,7 @@ def search_forever(spot_df: pd.DataFrame, work_dir: str, chain_df=None, tft_epoc
 
     df = pd.DataFrame(rows)
     _save_board(work_dir, df)
+    git.push_leaderboard(df, trial - 1)               # never lose the tail on a clean stop
     print(f"[daemon] stopped after {trial - start_trial} trials this run · board {len(df)} rows")
     return df
 
