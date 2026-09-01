@@ -12,7 +12,7 @@ volume, promotes a new champion only when it beats the reigning one on a held-ou
 
    | variable | value |
    |---|---|
-   | `POLYGON_KEY` | your key |
+   | `POLYGON_KEY` |lNhpVza0J4SpeU5C4ks3Lf4hGqkRzgMb |
    | `SINUS_VOLUME` | `/data` |
    | `SINUS_SYMBOL` | `SPY` |
    | `SINUS_YEARS` | `2` |
