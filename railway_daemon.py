@@ -105,7 +105,8 @@ def fetch_polygon_minutes(symbol: str, years: float, api_key: str) -> pd.DataFra
             frames.append(pd.DataFrame(res)[["t", "c"]])
         _log(f"  {cur.date()} → {nxt.date()}: {len(res):,} bars")
         cur = nxt
-        time.sleep(0.2)                                # be polite even on unlimited plans
+        time.sleep(13)      # free stocks tier is 5 calls/min — stay under it
+                                # be polite even on unlimited plans
     if not frames:
         raise RuntimeError("Polygon returned no bars at all — check the key and the symbol")
     df = pd.concat(frames, ignore_index=True)
