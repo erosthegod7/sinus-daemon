@@ -1,5 +1,3 @@
-Sinus inbox · PY
-"""
 sinus_inbox.py
 ==============
 On-demand runner: GitHub `inbox/` -> SINUS -> raw output -> `old/<date>/`.
