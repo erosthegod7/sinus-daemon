@@ -1,4 +1,3 @@
-
 Sinus inbox · PY
 """
 sinus_inbox.py
