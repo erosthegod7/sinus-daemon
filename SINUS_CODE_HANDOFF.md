@@ -69,6 +69,21 @@ in the Windows user environment; `.gitignore` and `.gitattributes` added.
 `C:\sinus\data\train_<stamp>.log`). A 2-hour check-in runs in the Code session; its prompt
 stops the trainer if any horizon's direction accuracy exceeds 0.80 or MAE drops below 0.35.
 
+**v3 run started 2026-09-05 11:13 ET** on an empty board (`train_20260905_1113.log`). The
+leaky v2 board and champion are under `Superseded\2026-09-05_v2-leaky-features\`. Commits
+`e8c5935` + `c9d8c8f` are on `origin/main` (pushed 11:30 ET once the PAT was extended to
+cover `sinus-daemon`); Railway deployment `7dffc708` builds from `c9d8c8f`.
+
+Two things to know about the first live call. On a weekend or holiday `serve()` cannot build
+a window (no bars today, no 0DTE expiry), so it falls back to physics and *that* raises
+`no contracts` — the inbox archives it as an error, which is correct. And until the trainer
+promotes its first v3 champion, `serve()` refuses the v2 one on the remote and says so. The
+first real end-to-end call is Tuesday 2026-09-08 (Monday is Labor Day).
+
+The trainer's log lost its lines from 11:13:45 to ~11:30 — a `tail -F` watcher held the file
+and every `Add-Content` failed. `run_train.ps1` now retries the append; the watcher polls
+instead of holding a handle. The leaderboard is the ground truth for progress regardless.
+
 **Corrections to the brief:** prune percentile is 60, not 50; the trainer reads
 `C:\sinus\data\history` (its own cache), not `chain/`; `n_features: 0` was `_promote` reading
 attributes the scaler never had.

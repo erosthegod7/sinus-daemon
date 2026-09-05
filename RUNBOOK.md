@@ -2,26 +2,28 @@
 
 Everything below assumes `C:\sinus-daemon` with the venv at `.\.venv`.
 
-## Rotate these keys first
+## Keys
 
-`run.ps1` carries your Polygon key and a GitHub PAT in plaintext, and that file
-has left the laptop. Revoke and reissue both before the next run:
+As of 2026-09-05 no launcher carries a secret: `run.ps1`, `run_train.bat`, `run_ohlcv.bat`
+and `run_train.ps1` all read `POLYGON_KEY` / `SINUS_GIT_TOKEN` from the Windows user
+environment (`_sinus_env.ps1` does the lookup for the PowerShell ones). Both values had
+previously been pasted into launcher files and read by tooling, so rotating them is still
+the right call — deferred by choice, not forgotten:
 
 - GitHub PAT: https://github.com/settings/personal-access-tokens
 - Polygon key: https://polygon.io/dashboard/keys
 
-Then delete `run.ps1` — `_sinus_env.ps1` already does the same job by reading
-from your Windows user environment, which is where secrets belong:
-
 ```powershell
-Remove-Item .\run.ps1
 [Environment]::SetEnvironmentVariable("POLYGON_KEY",     "<new key>",  "User")
 [Environment]::SetEnvironmentVariable("SINUS_GIT_REPO",  "erosthegod7/sinus-champion", "User")
 [Environment]::SetEnvironmentVariable("SINUS_GIT_TOKEN", "<new PAT>",  "User")
 ```
 
-The PAT needs **Contents: read and write** on `erosthegod7/sinus-champion` and
-nothing else.
+Open a new window afterwards; an existing one keeps its old copy.
+
+The PAT needs **Contents: read and write** on `erosthegod7/sinus-champion` (the champion
+store) and on `erosthegod7/sinus-daemon` (the code — pushes from the laptop need it; extended
+2026-09-05).
 
 ## Install
 

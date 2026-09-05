@@ -413,6 +413,10 @@ def serve(symbol: str = "SPY", work_dir: str = "champion", spot: Optional[float]
             traceback.print_exc(limit=2)
 
     # ---- physics-only, and the output says exactly why ------------------------------------
+    # Say it BEFORE touching the ladder: on a weekend or holiday the ladder fetch itself raises
+    # (no 0DTE expiry), and a run that dies there must still have recorded why it was not
+    # a champion call in the first place.
+    print(f"[serve] physics-only ({why})")
     lad, spot_px, _ = fetch_snapshot_ladder(symbol, spot=spot)
     now = pd.Timestamp.now(tz="America/New_York")
     mtc = max((now.normalize() + pd.Timedelta(hours=16) - now).total_seconds() / 60.0, 0.0)

@@ -28,7 +28,7 @@ build is installed — uninstall torch and redo step 3.
 ```powershell
 $env:POLYGON_KEY        = "your key"
 $env:SINUS_GIT_REPO     = "erosthegod7/sinus-champion"     # a SEPARATE repo from the code
-$env:SINUS_GIT_TOKEN    = "github_pat_..."                  # fine-grained, Contents: read/write on that repo
+$env:SINUS_GIT_TOKEN    = "github_pat_..."                  # fine-grained, Contents: read/write on sinus-champion AND sinus-daemon (code pushes need it; extended 2026-09-05)
 $env:SINUS_NODE         = "laptop"
 $env:SINUS_VOLUME       = "C:\sinus\data"
 $env:SINUS_MAX_SESSIONS = "500"        # 32 GB handles it; Railway is capped at 300
