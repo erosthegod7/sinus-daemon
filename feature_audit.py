@@ -28,8 +28,9 @@ N = int(sys.argv[1]) if len(sys.argv) > 1 else 60
 
 # Ordered: first pattern that matches a column wins, so a column is counted exactly once.
 FAMILIES = [
+    ("Lags / deltas (trees only)", r"_d\d+m$|^ret_(10|20|25|40|50)m$"),
     ("GEX / gamma book", r"gex|gamma"),
-    ("Greeks (vanna/charm/theta/vega/delta)", r"vanna|charm|theta|vega|delta"),
+    ("Greeks (vanna/charm)", r"vanna|charm"),
     ("Implied vol", r"\biv_|_iv\b|implied|skew"),
     ("Premium / flow $", r"prem"),
     ("Open interest", r"_oi\b|open_int"),
@@ -52,7 +53,11 @@ def classify(name):
 
 
 def main():
+    # Exactly the trainer's contract: horizons, candle + ATM blocks, lag block, BS greeks,
+    # and its own per-session cache under history/. Auditing anything else audits a
+    # different model.
     sinus_train.install_horizons()
+    sinus_train.install_extra_features()
 
     print(f"spot : {CSV}")
     spot = sinus_train.load_ohlcv(CSV)
@@ -60,17 +65,12 @@ def main():
     print(f"       {len(spot):,} RTH bars · open/high/low present on {has_candles:.0%} of rows")
     if has_candles < 0.5:
         print("       !! this file has no real candles — the whole candle block will be dead")
+    keep = sorted(spot["ts"].dt.normalize().unique())[-N:]
+    spot = spot[spot["ts"].dt.normalize().isin(keep)].reset_index(drop=True)
 
-    print(f"chain: {VOL}\\chain  (last {N} sessions)")
-    from sinus_chain_loader import load_history
-    _, chain, flow = load_history(VOL, max_sessions=N, verbose=False)
-    print(f"       {len(chain):,} chain rows · {len(flow):,} flow rows")
-
-    # Align spot to the sessions the chain actually covers, else most chain features are
-    # NaN purely because there is no book for those bars — which would look like a bug.
-    days = set(pd.DatetimeIndex(chain["ts"]).normalize().unique())
-    spot = spot[spot["ts"].dt.normalize().isin(days)].reset_index(drop=True)
-    print(f"       overlap: {len(spot):,} bars on {spot['ts'].dt.normalize().nunique()} sessions\n")
+    print(f"chain: {VOL}\\history  (last {N} sessions — the trainer's cache; an uncached session would be built from Polygon)")
+    chain, flow = sinus_train.build_history(spot, os.environ.get("SINUS_SYMBOL", "SPY"))
+    print(f"       {len(chain):,} chain rows · {len(flow):,} flow rows on {spot['ts'].dt.normalize().nunique()} sessions\n")
 
     out = FeaturePipeline(PipelineConfig()).fit_transform(spot, chain, flow)
     raw, fin = out.features_raw, out.features

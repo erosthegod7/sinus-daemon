@@ -59,6 +59,13 @@ is still holding and the trial-18 v2 one in `sinus-champion/champion/`.
 - `champion.json` now carries `scoring_version` and a real `n_features` (Task 4 both parts);
   `push_champion` refuses to compare across scoring versions.
 
+**Railway never loaded a champion — on any version.** `sinus_inbox.process_once` pulled the
+champion into `<store work_dir>/champion/` and then handed `serve()` `VOL/champion/`, one
+level apart, so `load_champion` failed every run and the service silently fell back to
+physics. That, not the git push, was the original "learned components weighted 0.00"
+symptom. Found by probing the live deployment; fixed in commit `9e86a3f`, pinned by
+`tests/test_inbox_path.py`.
+
 **Railway (Task 2).** `sinus_daemon.serve()` now installs the trainer's feature contract, refuses
 any champion whose `feature_set` ≠ this build's, and runs `sinus.predict_live` — live OHLCV
 from Polygon for the context window, today's option book through the SAME builder the champion
