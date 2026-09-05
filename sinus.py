@@ -2001,7 +2001,8 @@ class EnsembleFusionEngine:
         Handles the not-served result (weekend/holiday) and a physics-only call."""
         m = r.get("_meta") or {}
         if m.get("served") is False:
-            return f"no call — {m.get('reason', 'not served')}" + (f" · {m['ladder_error']}" if m.get("ladder_error") else "")
+            reason, err = str(m.get("reason", "not served")), str(m.get("ladder_error") or "")
+            return f"no call — {reason}" + (f" · {err}" if err and err not in reason else "")
         p = r.get("_physics") or {}
         hs = [h for h in HORIZONS if h in r]
         ch = m.get("champion") or {}
