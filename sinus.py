@@ -3291,7 +3291,12 @@ def predict_live(symbol: str = "SPY", champion_dir: str = "champion", spot_histo
             chain_df, flow_df = None, None
     out = pipeline.transform(spot_df, chain_df, flow_df)
     idx = len(out.meta) - 1
-    bundle = bundle_for_rows(out, np.arange(idx + 1), lookback)
+    # ONLY the bar being called. The fusion layer reads one row from every expert array, and a
+    # window per bar of the context (~2,000 of them) put the TFT through nearly three minutes
+    # of CPU inference on Railway for a result that used the last one (2026-09-05 probe).
+    # sequences() still needs `lookback` bars in this bar's session for the TFT to have a window;
+    # early in a session the trees answer alone, exactly as before.
+    bundle = bundle_for_rows(out, np.array([idx]), lookback)
     pred = engine.predict(bundle)
     # Said before the ladder is touched, so a run that dies on the options side still records
     # that the champion's experts ran on a live window. That is the claim worth proving.

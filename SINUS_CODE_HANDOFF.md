@@ -109,7 +109,12 @@ lookback 60). The leaky v2 champion scored 0.491 / 0.69; do not read that as bet
 'tft_q50']` — champion loaded, live window from Polygon, the champion's own scaler, all
 three experts. It then failed only because no 0DTE expiry exists on a Saturday. Found on the
 way: the STOCK aggregates on this key are rate-limited to a few calls a minute — the context
-window is now one range request (`fetch_polygon_range`) instead of one per session.
+window is now one range request (`fetch_polygon_range`) instead of one per session. The
+OPTIONS side is not limited (9 contract pulls in 2.5 s, no backoff), so Tuesday's ~60-call
+book build is fine. A market-closed call now ends in one line, not a traceback. And
+`predict_live` used to build and predict a TFT window for every bar of the context (~2,000)
+when the call uses the last one — 2 min 45 s of CPU inference on Railway; it now predicts
+the one bar being called. Expect a live call to take well under a minute.
 
 **Corrections to the brief:** prune percentile is 60, not 50; the trainer reads
 `C:\sinus\data\history` (its own cache), not `chain/`; `n_features: 0` was `_promote` reading
