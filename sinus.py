@@ -3207,6 +3207,28 @@ def fetch_polygon_day(symbol: str, day: Union[str, pd.Timestamp], api_key: str) 
                                    "low": num("l"), "volume": num("v")}), verbose=False)
 
 
+def fetch_polygon_range(symbol: str, start: Union[str, pd.Timestamp], end: Union[str, pd.Timestamp],
+                        api_key: str) -> pd.DataFrame:
+    """A date range of 1-min bars in ONE request -> spot_df with candles.
+
+    A week is ~2,000 RTH bars (~6,000 with extended hours), far under the 50,000 cap. The
+    per-day form costs a request per session, and the stock aggregates on this key are
+    rate-limited to a handful of calls a minute: six back-to-back calls for a context window
+    were enough to fail the live call outright (2026-09-05 probe).
+    """
+    a, b = pd.Timestamp(start).strftime("%Y-%m-%d"), pd.Timestamp(end).strftime("%Y-%m-%d")
+    j = _get(f"/v2/aggs/ticker/{symbol}/range/1/minute/{a}/{b}", {"adjusted": "true", "sort": "asc", "limit": 50000}, api_key)
+    res = j.get("results") or []
+    cols = ["ts", "spot", "open", "high", "low", "volume"]
+    if not res:
+        return pd.DataFrame(columns=cols)
+    df = pd.DataFrame(res)
+    ts = pd.to_datetime(df["t"], unit="ms", utc=True).dt.tz_convert(TZ)
+    num = lambda c: pd.to_numeric(df[c], errors="coerce") if c in df else np.nan  # noqa: E731
+    return _finalise(pd.DataFrame({"ts": ts, "spot": num("c"), "open": num("o"), "high": num("h"),
+                                   "low": num("l"), "volume": num("v")}), verbose=False)
+
+
 def predict_live(symbol: str = "SPY", champion_dir: str = "champion", spot_history: Optional[pd.DataFrame] = None,
                  context_sessions: int = 5, api_key: Optional[str] = None, log_csv: Optional[str] = None,
                  verbose: bool = True) -> Dict[str, Any]:
@@ -3227,8 +3249,7 @@ def predict_live(symbol: str = "SPY", champion_dir: str = "champion", spot_histo
 
     now = pd.Timestamp.now(tz=TZ)
     days = pd.bdate_range(end=now.normalize(), periods=context_sessions + 3)[-(context_sessions + 1):]
-    frames = [fetch_polygon_day(symbol, d, key) for d in days]
-    spot_df = pd.concat([f for f in frames if len(f)], ignore_index=True)
+    spot_df = fetch_polygon_range(symbol, days[0], days[-1], key)      # one request, not one per day
     if spot_df.empty:
         raise RuntimeError("Polygon returned no bars for the context window — market closed, or key lacks stocks")
     today_rows = int((spot_df["ts"].dt.normalize() == now.normalize()).sum())
@@ -3272,6 +3293,12 @@ def predict_live(symbol: str = "SPY", champion_dir: str = "champion", spot_histo
     idx = len(out.meta) - 1
     bundle = bundle_for_rows(out, np.arange(idx + 1), lookback)
     pred = engine.predict(bundle)
+    # Said before the ladder is touched, so a run that dies on the options side still records
+    # that the champion's experts ran on a live window. That is the claim worth proving.
+    _h0 = list(engine.cfg.horizons)[0]
+    _live = [k for k in ("lgb", "cat", "tft_q50") if k in pred[_h0] and np.isfinite(pred[_h0][k]).any()]
+    print(f"[live] champion trial {meta.get('trial')} ran on bar {out.meta['ts'].iloc[idx]} · "
+          f"{bundle.X.shape[1]} features · experts {_live or 'NONE'}")
 
     meta_row = out.meta.iloc[idx]
     fr = out.features_raw.iloc[idx]
