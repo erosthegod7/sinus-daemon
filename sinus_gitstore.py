@@ -141,6 +141,14 @@ class GitStore:
              f"promoted by {meta.get('node', '?')}")
         return meta
 
+    def _remote_meta(self) -> Optional[Dict[str, Any]]:
+        """champion.json on the remote as last synced, or None."""
+        p = os.path.join(self.clone_dir, "champion", "champion.json")
+        try:
+            return json.load(open(p))
+        except Exception:
+            return None
+
     def remote_champion_score(self) -> Optional[float]:
         """Current champion's test score on GitHub, after a fresh fetch. Used to re-check a
         candidate right before pushing, in case the other node promoted meanwhile."""
@@ -161,14 +169,39 @@ class GitStore:
         if not self.enabled:
             return False
         remote = self.remote_champion_score()
+        # A score is only meaningful against the scoring rule that produced it. A remote champion
+        # from a different scoring_version is not a bar to beat — it is a different number.
+        # Without this, a second node still running the old rule could hijack the champion
+        # with a score that means nothing here.
+        rmeta = self._remote_meta() if remote is not None else None
+        if rmeta is not None and rmeta.get("scoring_version") != meta.get("scoring_version"):
+            _log(f"remote champion scored under {rmeta.get('scoring_version')!r}, this one under "
+                 f"{meta.get('scoring_version')!r} — not comparable, treating remote as absent")
+            remote = None
         mine = float(meta["test_score"])
         if remote is not None and mine >= remote - min_improvement:
             _log(f"not pushing: remote champion {remote:.4f} is already at least as good as {mine:.4f}")
             return False
+        # Refuse a source that is a work directory rather than a champion directory, BEFORE
+        # touching anything already staged. self.url embeds the PAT, so `git clone` leaves it
+        # in .git/config — copying a clone into a PUBLIC repo publishes the token. Handing this
+        # function the parent of _gitstore is an easy mistake and an expensive one: the retired
+        # old/superseded/push_champion_now.py did exactly that. It is also wrong on its own
+        # terms, since the champion weights are not at that level, so the push would publish a
+        # champion whose metadata describes a different model than its weights.
+        wrong = [n for n in (".git", "_gitstore", "_candidate")
+                 if os.path.exists(os.path.join(local_champion_dir, n))]
+        if wrong:
+            _log(f"REFUSING to push {local_champion_dir}: it contains {wrong[0]}, so it is a work "
+                 f"directory, not a champion. Pass <work_dir>/champion instead.")
+            return False
+
         dst = os.path.join(self.clone_dir, "champion")
         if os.path.exists(dst):
             shutil.rmtree(dst, ignore_errors=True)
-        shutil.copytree(local_champion_dir, dst)
+        # Belt and braces: even from a correct source, never carry a nested clone along.
+        shutil.copytree(local_champion_dir, dst,
+                        ignore=shutil.ignore_patterns(".git", "_gitstore", "_candidate", "_preflight"))
         meta = {**meta, "node": self.node, "pushed_at": str(pd.Timestamp.now(tz="UTC"))}
         json.dump(meta, open(os.path.join(dst, "champion.json"), "w"), indent=2, default=float)
         # keep a dated lineage so a bad later champion can be rolled back

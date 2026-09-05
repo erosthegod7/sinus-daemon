@@ -1,0 +1,33 @@
+# --- secrets -----------------------------------------------------------------
+# No launcher stores credentials: POLYGON_KEY / SINUS_GIT_TOKEN come from the
+# Windows user environment (see run_train.bat's header, and _sinus_env.ps1).
+# These patterns are a backstop in case anyone reintroduces a local env file.
+.env
+*.local.bat
+*.local.ps1
+env.local.*
+
+# --- virtualenv / bytecode ---------------------------------------------------
+.venv/
+__pycache__/
+*.py[cod]
+
+# --- mechanical backups ------------------------------------------------------
+# Produced by the one-shot patch scripts in old/. Regenerable, not history.
+*.bak
+*.prefix.bak
+
+# --- run artifacts -----------------------------------------------------------
+*.log
+daemon_run.log
+
+# --- data --------------------------------------------------------------------
+# Lives in C:\sinus\data, never in the repo. Guarded in case a path changes.
+*.csv
+*.parquet
+*.pkl
+*.cbm
+*.pt
+champion_v2/
+_gitstore/
+_candidate/

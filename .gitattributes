@@ -1,0 +1,10 @@
+# Store LF in the repo regardless of the OS that committed. Windows checkouts still get
+# CRLF via core.autocrlf; the point is that a file edited on the laptop and on Railway's
+# Linux build never shows every line as changed.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.png binary
+*.pt  binary
+*.pkl binary
+*.cbm binary

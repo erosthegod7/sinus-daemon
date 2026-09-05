@@ -42,7 +42,7 @@ import numpy as np
 import pandas as pd
 
 from sinus import (FeaturePipeline, PipelineConfig, TrainingBundle, CoreModelingEngine,
-                   EngineConfig, HORIZONS, log)
+                   EngineConfig, HORIZONS, TZ, log)
 
 
 # ----------------------------------------------------------------------------- #
@@ -87,11 +87,45 @@ def _apply(cfg: EngineConfig, p: Dict[str, Any]) -> EngineConfig:
 # ----------------------------------------------------------------------------- #
 # Scoring
 # ----------------------------------------------------------------------------- #
-def score_predictions(pred: Dict[str, Any], Y: np.ndarray, horizons=HORIZONS) -> Dict[str, float]:
+SCORING_VERSION = "eod_pre11"
+EOD_SCORING_CUTOFF = "11:00"
+
+
+def score_predictions(pred: Dict[str, Any], Y: np.ndarray, horizons=HORIZONS,
+                      ts: Optional[pd.Series] = None,
+                      eod_cutoff: str = EOD_SCORING_CUTOFF) -> Dict[str, float]:
     """Trimmed MAE + directional accuracy per horizon, on the ensemble mean of whatever
     experts exist. Trimmed at the 95th percentile because a handful of gap bars would
-    otherwise decide the whole ranking."""
+    otherwise decide the whole ranking.
+
+    'eod' is scored ONLY on samples before `eod_cutoff` local market time. A 3:30pm sample
+    has an eod target 30 minutes out; a 9:35am one has it 6.5 hours out. Same label, wildly
+    different difficulty. Averaging them pushed eod accuracy past 95% while 5m sat near 57%,
+    and that easy sixth of the objective flattened the gap between good configs and bad.
+    Those late rows are still PREDICTED and still shown live — they just stop counting
+    toward a trial's rank.
+
+    `ts` is the per-row bar timestamp for the rows making up Y, tz-aware, same length.
+    TrainingBundle carries it, so pass bundle.ts. Without it the eod mask cannot be built
+    and scoring falls back to the old full-session behaviour, loudly — a silent fallback
+    here changes the score scale and invalidates every comparison on the board.
+    """
     out, maes, accs = {}, [], []
+
+    eod_mask = None
+    if ts is not None:
+        # DatetimeIndex(series) directly — NOT series.values, which on a tz-aware Series
+        # hands back UTC-based datetime64 with the zone dropped. Localising that to TZ
+        # reads 14:30 UTC as 14:30 Eastern and shifts every bar by the offset, so the
+        # 11:00 cut lands in the wrong place and the mask silently selects the wrong rows.
+        t = pd.DatetimeIndex(ts)
+        t = t.tz_localize(TZ) if t.tz is None else t.tz_convert(TZ)
+        if len(t) != len(Y):
+            raise ValueError(f"ts has {len(t)} rows but Y has {len(Y)} — they must line up")
+        eod_mask = t.time < pd.Timestamp(eod_cutoff).time()
+    else:
+        print("[score] WARNING no ts passed — eod scored on the full session (old scale)", flush=True)
+
     for j, h in enumerate(horizons):
         y = Y[:, j]
         stack = [pred[h][k] for k in ("lgb", "cat", "tft_q50") if k in pred[h]]
@@ -101,8 +135,15 @@ def score_predictions(pred: Dict[str, Any], Y: np.ndarray, horizons=HORIZONS) ->
         arr = np.stack(stack)
         cnt = np.isfinite(arr).sum(0)
         p = np.where(cnt > 0, np.where(np.isfinite(arr), arr, 0.0).sum(0) / np.maximum(cnt, 1), np.nan)
-        m = np.isfinite(y) & np.isfinite(p)
+        finite = np.isfinite(y) & np.isfinite(p)
+        m = finite & eod_mask if (h == "eod" and eod_mask is not None) else finite
+        if h == "eod" and eod_mask is not None:
+            # Roughly 3x as many dropped as scored on a full session. If it is not, the
+            # mask is not biting and the score is back on the old scale without saying so.
+            out["eod_scored_rows"] = int(m.sum())
+            out["eod_dropped_rows"] = int((finite & ~eod_mask).sum())
         if m.sum() < 30:
+            out[f"mae_{h}"], out[f"acc_{h}"] = float("nan"), float("nan")
             continue
         e = np.abs(p[m] - y[m])
         cut = np.quantile(e, 0.95)
@@ -117,6 +158,8 @@ def score_predictions(pred: Dict[str, Any], Y: np.ndarray, horizons=HORIZONS) ->
     out["acc_mean"] = float(np.mean(accs)) if accs else 0.0
     # lower is better; direction is a mild tiebreak, not a co-equal objective
     out["score"] = out["mae_mean"] - 0.25 * (out["acc_mean"] - 0.5)
+    # Stamped on every row so a board can never silently mix two score scales.
+    out["scoring_version"] = SCORING_VERSION if eod_mask is not None else "eod_full_session"
     return out
 
 
@@ -157,7 +200,7 @@ def run_search(spot_df: pd.DataFrame, chain_df: Optional[pd.DataFrame] = None, n
             cfg = _apply(EngineConfig(), p)
             cfg.tft.max_epochs = tft_epochs
             eng = CoreModelingEngine(cfg).fit(train)
-            rec.update(score_predictions(eng.predict(val), val.Y))
+            rec.update(score_predictions(eng.predict(val), val.Y, ts=val.ts))
             rec["status"] = "ok"
         except Exception as e:                       # one bad config must not end the search
             rec.update({"status": f"failed: {type(e).__name__}", "score": float("inf"),
@@ -211,7 +254,7 @@ def confirm_on_test(spot_df: pd.DataFrame, params: Dict[str, Any], chain_df=None
     cfg.tft.max_epochs = tft_epochs
     eng = CoreModelingEngine(cfg).fit(train)
     eng.save(model_dir)
-    s = score_predictions(eng.predict(test), test.Y)
+    s = score_predictions(eng.predict(test), test.Y, ts=test.ts)
     print(f"[test] mae {s['mae_mean']:.4f} · dir acc {s['acc_mean']:.3f} · saved to {model_dir}")
     for h in HORIZONS:
         if f"mae_{h}" in s:

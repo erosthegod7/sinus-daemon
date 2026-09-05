@@ -40,6 +40,14 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+# Windows consoles default to cp1252, which cannot encode the arrows and box characters the
+# progress lines use — an UnicodeEncodeError there would kill the daemon mid-run.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 VOL = os.environ.get("SINUS_VOLUME", "/data")
 SYMBOL = os.environ.get("SINUS_SYMBOL", "SPY")
 YEARS = float(os.environ.get("SINUS_YEARS", "2"))
@@ -174,14 +182,24 @@ def resolve_price_history() -> pd.DataFrame:
     """Volume cache → uploaded CSV → Polygon. Caches whatever it resolves for next boot."""
     import sinus
 
-    cached = _cache_read()
+    csv = os.environ.get("SINUS_CSV")
+    path = (csv if os.path.isabs(csv) else os.path.join(VOL, csv)) if csv else None
+
+    # A freshly rebuilt SINUS_CSV must beat the cache. After a backfill the cache still holds
+    # the old, much shorter series; reading it there means booting on a fraction of the data
+    # that was just downloaded — which looks exactly like the backfill having failed.
+    stale = bool(path and os.path.exists(path) and any(
+        os.path.exists(c) and os.path.getmtime(path) > os.path.getmtime(c)
+        for c in (CACHE_PQ, CACHE_CSV)))
+    if stale:
+        _log("SINUS_CSV is newer than the price cache — using the CSV and refreshing the cache")
+
+    cached = None if stale else _cache_read()
     if cached is not None:
         _log(f"price history from cache: {len(cached):,} bars")
         return sinus._finalise(cached, verbose=True)
 
-    csv = os.environ.get("SINUS_CSV")
     if csv:
-        path = csv if os.path.isabs(csv) else os.path.join(VOL, csv)
         if os.path.exists(path):
             _log(f"loading uploaded CSV {path}")
             df = sinus.load_csv(path)
@@ -344,9 +362,37 @@ def main() -> int:
     start_http_server(work, int(os.environ.get("PORT", "8080")))
     _log(f"work_dir {work} — leaderboard and champion persist here across restarts")
 
+    _last_err, _repeat = None, 0
     while True:                                        # outer loop: survive an unexpected crash
         try:
-            sd.search_forever(spot_df, work_dir=work, tft_epochs=EPOCHS, prune=PRUNE,
+            # --- options-book feed (patch_daemon_chain.py) ---------------------------------
+            chain_df, flow_df = None, None
+            if os.environ.get('SINUS_USE_CHAIN', '1') == '1':
+                try:
+                    from sinus_chain_loader import load_history as _load_chain
+                    _cdir = os.environ.get('SINUS_DATA', os.path.dirname(os.path.abspath(__file__)))
+                    _spot2, chain_df, flow_df = _load_chain(_cdir, max_sessions=int(os.environ.get('SINUS_MAX_SESSIONS', '500')))
+                    if os.environ.get('SINUS_SPOT_FROM_CHAIN', '1') == '1' and len(_spot2) > 0:
+                        spot_df = _spot2      # parity spot from the chain: no stocks plan, no 5-calls/min crawl
+                        # The MIN_SESSIONS check above ran on the Polygon/CSV frame. Substituting the
+                        # chain's parity spot can drop the count far below the floor without tripping
+                        # it — on 2026-09-02 that started a search on 5 sessions against a floor of 7.
+                        _n = spot_df['ts'].dt.normalize().nunique()
+                        if _n < MIN_SESSIONS:
+                            _log(f"FATAL chain parity spot covers {_n} sessions, floor is {MIN_SESSIONS}. "
+                                 f"Back-fill more days (polygon_chain_history.py) or set "
+                                 f"SINUS_SPOT_FROM_CHAIN=0 to keep the longer price-only series.")
+                            return 1
+                    print(f'[chain] feed loaded: {len(chain_df):,} chain rows · {len(flow_df):,} prints · '
+                          f'{spot_df["ts"].dt.normalize().nunique()} sessions', flush=True)
+                except Exception as _e:
+                    print(f'[chain] feed unavailable ({type(_e).__name__}: {_e}) - training price-only', flush=True)
+                    chain_df, flow_df = None, None
+            # ----------------------------------------------------------------------------------
+            import sinus_evolve as _se
+            _SEARCH = _se.evolve_forever if os.environ.get('SINUS_MODE', 'evolve') == 'evolve' else sd.search_forever
+            print(f"[mode] {'EVOLVE (breed/cull)' if _SEARCH is _se.evolve_forever else 'random search'}", flush=True)
+            _SEARCH(spot_df, chain_df=chain_df, flow_df=flow_df, work_dir=work, tft_epochs=EPOCHS, prune=PRUNE,
                               prune_percentile=PRUNE_PCT, screen_rounds=SCREEN_ROUNDS)
             _log("search_forever returned (stop requested) — exiting")
             return 0
@@ -356,8 +402,20 @@ def main() -> int:
         except Exception as e:
             _log(f"daemon crashed: {e}")
             traceback.print_exc()
-            _log("restarting in 60s; the leaderboard is intact so at most one trial is lost")
-            time.sleep(60)
+            # A bug that fails on every boot used to retry every 60s all night and still
+            # look like a running daemon. Back off, and give up on a fault that is clearly
+            # not transient so it is visible in the morning instead of buried in a log.
+            sig = f"{type(e).__name__}: {e}"
+            _repeat = _repeat + 1 if sig == _last_err else 1
+            _last_err = sig
+            if _repeat >= 5:
+                _log(f"FATAL same failure {_repeat}x in a row — this is not transient. Exiting so "
+                     f"you see it. The leaderboard and champion on disk are intact.")
+                return 1
+            wait = min(60 * 2 ** (_repeat - 1), 900)
+            _log(f"restarting in {wait}s (failure {_repeat}/5); the leaderboard is intact "
+                 f"so at most one trial is lost")
+            time.sleep(wait)
 
 
 if __name__ == "__main__":

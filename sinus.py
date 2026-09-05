@@ -586,8 +586,11 @@ def premium_flow_features(chain: Optional[pd.DataFrame], flow: Optional[pd.DataF
         fl["dark"] = prem * (tt == "dark_pool")
         fl["swp"] = prem * (tt == "sweep")
         fl["all"] = prem
-        sd = fl["side"].astype(str).str.lower().map({"ask": 1.0, "bid": -1.0}).fillna(0.0)
-        ot = fl["option_type"].astype(str).str.upper().map({"C": 1.0, "P": -1.0}).fillna(0.0)
+        # Accept every spelling the feeds actually use. The historical builder writes buy/sell
+        # and call/put; the live ladder writes ask/bid and C/P. Keyed on one convention only,
+        # both of these silently mapped to 0 and block_signed_bias was zero for 500 sessions.
+        sd = fl["side"].astype(str).str.lower().map({"ask": 1.0, "buy": 1.0, "bid": -1.0, "sell": -1.0}).fillna(0.0)
+        ot = fl["option_type"].astype(str).str.upper().str[:1].map({"C": 1.0, "P": -1.0}).fillna(0.0)
         fl["sblk"] = fl["blk"] * sd * ot
         b = fl.groupby("ts_grid", sort=False)[["blk", "dark", "swp", "all", "sblk"]].sum()
         b = spine[["ts"]].join(b, on="ts").drop(columns=["ts"]).fillna(0.0)
@@ -619,7 +622,11 @@ def price_context_features(grid: pd.DataFrame, cfg: PipelineConfig) -> pd.DataFr
     f["dist_to_twap"] = p - p.groupby(by, sort=False).cumsum() / (grid["minutes_since_open"] + 1.0)
     daily = grid.groupby("session_date", sort=True)["spot"].agg(["first", "last", "max", "min"])
     daily["prior_close"] = daily["last"].shift(1)
-    daily["prior_ret"] = np.log(daily["last"] / daily["prior_close"])
+    # YESTERDAY's close-to-close return. Without the shift this was TODAY's — the day's own
+    # close joined onto every one of its bars, and with prior_close and spot also in the
+    # matrix the eod target became arithmetic. Every champion through 2026-09-05 scored 90%+
+    # eod direction on it and collapsed to 33% with it removed. It is also a TFT static input.
+    daily["prior_ret"] = np.log(daily["last"] / daily["prior_close"]).shift(1)
     daily["prior_range_pct"] = ((daily["max"] - daily["min"]) / daily["last"]).shift(1)
     daily["gap_pct"] = np.log(daily["first"] / daily["prior_close"])
     h = grid[["session_date"]].join(daily[["prior_close", "prior_ret", "prior_range_pct", "gap_pct"]], on="session_date")
@@ -828,17 +835,24 @@ class FeaturePipeline:
 
 def verify_causality(pipe: FeaturePipeline, spot: pd.DataFrame, chain: pd.DataFrame, flow: pd.DataFrame,
                      cut_minutes: int = 200, atol: float = 1e-6) -> bool:
-    """Leakage test: features at bar t computed from the FULL day must equal features computed from a tape truncated at t."""
-    last_day = pd.to_datetime(spot["ts"]).max().normalize()
-    def _day(df: pd.DataFrame) -> pd.DataFrame:
-        ts = to_session_tz(df["ts"], pipe.cfg.tz)
-        return df[ts.dt.normalize() == last_day]
-    s, c, f = _day(spot), _day(chain), _day(flow)
+    """Leakage test: features at bar t of the LAST day computed from the full tape must equal
+    features computed from the tape truncated at t.
+
+    Prior days are kept on both sides. An earlier version isolated the last day alone, which
+    left every cross-day feature (hist_*) NaN on both sides and therefore "equal" — and that
+    is exactly where a same-day aggregate was hiding (prior_ret without its shift). A causality
+    test that cannot see yesterday cannot catch a feature that secretly contains today.
+    """
+    last_day = to_session_tz(spot["ts"], pipe.cfg.tz).max().normalize()
+    def _upto(df: pd.DataFrame) -> pd.DataFrame:
+        return df[to_session_tz(df["ts"], pipe.cfg.tz).dt.normalize() <= last_day]
+    s, c, f = _upto(spot), _upto(chain), _upto(flow)
     full = pipe.transform(s, c, f)
-    cut_ts = full.meta["ts"].iloc[cut_minutes]
+    pos = int(np.where(full.meta["ts"].dt.normalize() == last_day)[0][cut_minutes])
+    cut_ts = full.meta["ts"].iloc[pos]
     trunc = pipe.transform(s[to_session_tz(s["ts"]) <= cut_ts], c[to_session_tz(c["ts"]) <= cut_ts], f[to_session_tz(f["ts"]) <= cut_ts])
-    a = full.features_raw.iloc[cut_minutes].to_numpy(float)
-    b = trunc.features_raw.iloc[cut_minutes].to_numpy(float)
+    a = full.features_raw.iloc[pos].to_numpy(float)
+    b = trunc.features_raw.iloc[pos].to_numpy(float)
     ok = np.allclose(np.nan_to_num(a), np.nan_to_num(b), atol=atol, rtol=1e-5)
     log.info("phase1.causality_check", extra={"event": "causality", "bar": str(cut_ts), "passed": bool(ok),
                                              "max_abs_diff": float(np.nanmax(np.abs(np.nan_to_num(a) - np.nan_to_num(b))))})
@@ -934,6 +948,10 @@ class TrainingBundle:
     row_idx: np.ndarray
     feature_names: List[str]
     seq: Optional[Dict[str, np.ndarray]] = None
+    # Per-row bar timestamps, tz-aware, one per row of Y and in the same order.
+    # Carried on the bundle rather than looked up at the call site so a scorer
+    # that masks by time of day cannot be handed timestamps from a different split.
+    ts: Optional[pd.Series] = None
     static_names: List[str] = field(default_factory=lambda: list(STATIC_COVARIATES) + ["is_monthly_opex", "is_quad_witching"])
     known_names: List[str] = field(default_factory=lambda: list(KNOWN_FUTURE))
 
@@ -952,7 +970,8 @@ class TrainingBundle:
             seq["X_static"] = np.concatenate([seq["X_static"], np.stack([tf, qw], 1).reshape(len(sd), 2)], 1).astype(np.float32)
             seq["groups"] = (sd.tz_convert("UTC").tz_localize(None).asi8 if sd.tz is not None else sd.asi8) if len(sd) else np.zeros(0, np.int64)
         b = cls(X=X.astype(np.float32), Y=Y.astype(np.float32), groups=np.asarray(groups, np.int64), row_idx=np.asarray(row_idx, int),
-                feature_names=list(out.features.columns), seq=seq)
+                feature_names=list(out.features.columns), seq=seq,
+                ts=out.meta["ts"].iloc[row_idx].reset_index(drop=True))
         log_shapes(f"phase2.bundle[{split}]", X=b.X, Y=b.Y, **{f"seq_{k}": v for k, v in (seq or {}).items()})
         return b
 
@@ -3162,11 +3181,17 @@ def fetch_polygon_day(symbol: str, day: Union[str, pd.Timestamp], api_key: str) 
     d = pd.Timestamp(day).strftime("%Y-%m-%d")
     j = _get(f"/v2/aggs/ticker/{symbol}/range/1/minute/{d}/{d}", {"adjusted": "true", "sort": "asc", "limit": 50000}, api_key)
     res = j.get("results") or []
+    cols = ["ts", "spot", "open", "high", "low", "volume"]
     if not res:
-        return pd.DataFrame(columns=["ts", "spot"])
-    df = pd.DataFrame(res)[["t", "c"]]
+        return pd.DataFrame(columns=cols)
+    df = pd.DataFrame(res)
     ts = pd.to_datetime(df["t"], unit="ms", utc=True).dt.tz_convert(TZ)
-    return _finalise(pd.DataFrame({"ts": ts, "spot": pd.to_numeric(df["c"], errors="coerce")}), verbose=False)
+    # The whole candle, not just the close. The trainer's candle/volume block
+    # (sinus_train._candle_block) reads open/high/low/volume; a live frame without them
+    # would silently zero eight features the champion was fitted on.
+    num = lambda c: pd.to_numeric(df[c], errors="coerce") if c in df else np.nan  # noqa: E731
+    return _finalise(pd.DataFrame({"ts": ts, "spot": num("c"), "open": num("o"), "high": num("h"),
+                                   "low": num("l"), "volume": num("v")}), verbose=False)
 
 
 def predict_live(symbol: str = "SPY", champion_dir: str = "champion", spot_history: Optional[pd.DataFrame] = None,
@@ -3199,7 +3224,29 @@ def predict_live(symbol: str = "SPY", champion_dir: str = "champion", spot_histo
                                                          "note": "TFT window spans into yesterday — early-session call, lower confidence"})
 
     chain_df, flow_df = None, None
-    if os.environ.get('SINUS_USE_CHAIN', '1') == '1':
+    mode = "off" if os.environ.get("SINUS_USE_CHAIN", "1") == "0" else os.environ.get("SINUS_LIVE_CHAIN", "build")
+    if mode == "build":
+        # Today's book from Polygon option minute bars through the SAME builder the champion was
+        # fitted on — sinus_train.build_session_chain plus its Black-Scholes greeks. About sixty
+        # calls, on demand only. Anything else (a snapshot ladder, a cache with another schema)
+        # hands the scaler columns it never saw, and the model runs on padding.
+        try:
+            import sinus_train as _st
+            today = spot_df[spot_df["ts"].dt.normalize() == now.normalize()]
+            if len(today) < 5:
+                raise RuntimeError(f"only {len(today)} bars today — too early to build a book")
+            chain_df, flow_df = _st.build_session_chain(today, now.strftime("%Y-%m-%d"), symbol, key)
+            for _df in (chain_df, flow_df):
+                if len(_df):
+                    _df["ts"] = pd.to_datetime(_df["ts"], utc=True).dt.tz_convert(TZ)
+            chain_df = _st._fill_bs_greeks(chain_df, spot_df) if len(chain_df) else None
+            flow_df = flow_df if len(flow_df) else None
+            log.info("predict_live.chain_built", extra={"event": "live", "chain_rows": 0 if chain_df is None else len(chain_df),
+                                                        "flow_rows": 0 if flow_df is None else len(flow_df)})
+        except Exception as _e:
+            log.warning("predict_live.chain_build_failed", extra={"err": f"{type(_e).__name__}: {_e}"})
+            chain_df, flow_df = None, None
+    elif mode == "cache":
         try:
             from sinus_chain_loader import load_recent_for_live as _lrl
             _s2, chain_df, flow_df = _lrl(os.environ.get('SINUS_DATA', os.path.dirname(os.path.abspath(__file__))))

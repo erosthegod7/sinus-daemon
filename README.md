@@ -46,6 +46,65 @@ On the volume at `/data/champion/`:
 The volume is not Google Drive. To see results, either use `railway logs`, or add a small
 HTTP endpoint later. The simplest path for now: watch the logs for the ★ NEW CHAMPION lines.
 
+## Training on the laptop
+
+```powershell
+.\run_train.ps1          # build option history if missing, then evolve forever
+.\run_train.ps1 -Build   # history only
+```
+
+`run_train.ps1` suppresses sleep for the life of its window and tees everything to
+`C:\sinus\data\train_<stamp>.log`. `run_train.bat` is the same run without either — fine at a
+desk, not for overnight. The trainer is `sinus_train.py`; it owns the feature contract
+(`FEATURE_SET`, currently `v3`), and every champion it promotes carries weights, `pipeline.pkl`
+(the fitted scaler) and `champion.json` to `erosthegod7/sinus-champion`.
+
+**v3 (2026-09-05).** Every earlier champion was scored on a leak: `hist_prior_ret` was the
+*current* day's close-to-close return, joined onto every bar of that day. Ablating that one
+column dropped eod direction accuracy from 0.94 to 0.33. Two volume features in the trainer were
+also full-session aggregates. All three are fixed, `tests/test_causality.py` proves the whole
+matrix causal, and nothing tagged `v2` is comparable to anything tagged `v3`. v3 also adds
+Black-Scholes vanna/charm (five features that were NaN) and a lag block — price returns at nine
+lags and the change over six windows for sixteen option-book state variables — so the trees see
+trajectory, not just the current bar.
+
+A plateau where wildly different hyperparameters all score within a hair of each other, and
+one horizon is far better than naive, is a leak until proven otherwise. The check-in prompt in
+the shepherd session flags any horizon with direction accuracy above 0.80 or MAE below 0.35.
+
+## Credentials
+
+No launcher stores a key. `POLYGON_KEY`, `SINUS_GIT_REPO` and `SINUS_GIT_TOKEN` are read from
+the Windows user environment on the laptop, and from Railway variables in the cloud. Set them
+once:
+
+```powershell
+[Environment]::SetEnvironmentVariable("POLYGON_KEY",     "<key>", "User")
+[Environment]::SetEnvironmentVariable("SINUS_GIT_TOKEN", "<PAT>", "User")
+```
+
+then open a new window — an existing one keeps its old copy. `_sinus_env.ps1` pulls them into
+the PowerShell launchers; the `.bat` launchers inherit them directly.
+
+## Tests
+
+```bash
+python tests/run_all.py           # everything, ~2 min (loads real bars and the chain cache)
+python tests/run_all.py --fast    # unit tests only, no data load
+```
+
+| suite | covers |
+|---|---|
+| `test_scoring.py` | the pre-11:00 eod rule — mask, drop ratio, tz handling, fallback, degenerate inputs |
+| `test_promotion_gate.py` | how the search seeds the bar it must beat; regression for the 2026-09-04 stall |
+| `test_gitstore_guard.py` | `push_champion` refuses a work directory, so a clone's token can't be published |
+| `test_serve_gate.py` | `serve()` refuses a champion from another feature set and says so; never silently physics-only |
+| `test_pipeline_smoke.py` | end-to-end on real SPY bars: RTH filtering, bundle/timestamp alignment, scoring |
+| `test_causality.py` | no feature knows the future: the trainer's full v3 matrix on its own feed, cut at three points; regression for the `hist_prior_ret` leak |
+
+`preflight.py` is the other half of this — it checks the machine and the data rather than the
+code. Run `python preflight.py --quick` before a long session.
+
 ## Honest expectations
 
 The search explores the CONFIGURATION space, which is effectively unbounded — so the daemon
