@@ -14,7 +14,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FAST = "--fast" in sys.argv
 
 SUITES = [("test_scoring.py", []), ("test_promotion_gate.py", []), ("test_gitstore_guard.py", []),
-          ("test_serve_gate.py", []), ("test_inbox_path.py", []), ("test_brief.py", [])]
+          ("test_serve_gate.py", []), ("test_inbox_path.py", []), ("test_brief.py", []),
+          ("test_search_tpe.py", [])]
 if not FAST:
     SUITES.append(("test_pipeline_smoke.py", ["40"]))
     SUITES.append(("test_causality.py", []))

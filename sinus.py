@@ -896,6 +896,7 @@ class TreeConfig:
     cat_task_type: str = "CPU"
     n_folds: int = 3
     embargo_groups: int = 1
+    time_decay_halflife: float = 0.0          # sessions; each half-life older counts half; 0 = uniform
     min_train_groups: int = 3
     fallback_val_frac: float = 0.2
     fallback_embargo_rows: int = 30
@@ -1063,6 +1064,19 @@ class CatCauchyObjective:
         return list(zip((-g).tolist(), (-h).tolist()))
 
 
+def _time_decay_weights(groups: np.ndarray, halflife_sessions: float) -> np.ndarray:
+    """Recency weights for the trees: a row from a session `halflife_sessions` older than the
+    newest counts half as much. 0 disables (uniform, the pre-2026-09-05 behaviour). The search
+    picks the half-life, so the data decides how non-stationary it is instead of a constant
+    guessed here."""
+    n = len(groups)
+    if not halflife_sessions or halflife_sessions <= 0 or n == 0:
+        return np.ones(n, dtype=np.float64)
+    _, ordinal = np.unique(groups, return_inverse=True)          # session rank, oldest = 0
+    age = ordinal.max() - ordinal
+    return np.power(0.5, age / float(halflife_sessions)).astype(np.float64)
+
+
 class TabularTreeLayer:
     """LightGBM + CatBoost per horizon; robust objective; TRAIN-only winsorisation; rolling-origin early stopping;
     final refit on all rows at the median best iteration."""
@@ -1119,12 +1133,13 @@ class TabularTreeLayer:
             yc = np.clip(y, lo, hi)
             self.offsets[h] = float(np.median(yc))
             yh = yc - self.offsets[h]
+            w = _time_decay_weights(gh, self.tc.time_decay_halflife)
             folds = list(splitter.split(gh))
             log.info("trees.fit", extra={"event": "trees_fit", "horizon": h, "rows": int(len(yh)), "folds": len(folds)})
             if _HAS_LGB:
                 self.history["lgb"][h], best = {}, []
                 for k, (tr, va) in enumerate(folds):
-                    dtr = lgb.Dataset(Xh[tr], label=yh[tr], feature_name=self.feature_names, free_raw_data=False)
+                    dtr = lgb.Dataset(Xh[tr], label=yh[tr], weight=w[tr], feature_name=self.feature_names, free_raw_data=False)
                     dva = lgb.Dataset(Xh[va], label=yh[va], reference=dtr, free_raw_data=False)
                     ev: Dict[str, Any] = {}
                     bst = lgb.train(self._lgb_params(), dtr, num_boost_round=self.tc.n_rounds_max, valid_sets=[dva], valid_names=["val"],
@@ -1136,21 +1151,21 @@ class TabularTreeLayer:
                     self.history["lgb"][h][f"fold{k}"] = {"best_iteration": bi, "val_tmae": float(ev["val"]["tmae"][bi - 1]),
                                                           "val_dir_acc": float(ev["val"]["dir_acc"][bi - 1])}
                 n_final = max(50, int(np.median(best))) if best else 500
-                self.lgb_models[h] = lgb.train(self._lgb_params(), lgb.Dataset(Xh, label=yh, feature_name=self.feature_names), num_boost_round=n_final,
+                self.lgb_models[h] = lgb.train(self._lgb_params(), lgb.Dataset(Xh, label=yh, weight=w, feature_name=self.feature_names), num_boost_round=n_final,
                                               callbacks=[_lgb_stop()])
                 self.history["lgb"][h]["final_rounds"] = n_final
             if _HAS_CAT:
                 self.history["cat"][h], best = {}, []
                 for k, (tr, va) in enumerate(folds):
                     m = self._cat_model(self.tc.n_rounds_max, self.tc.early_stopping_rounds)
-                    m.fit(Pool(Xh[tr], yh[tr], feature_names=self.feature_names), eval_set=Pool(Xh[va], yh[va], feature_names=self.feature_names))
+                    m.fit(Pool(Xh[tr], yh[tr], weight=w[tr], feature_names=self.feature_names), eval_set=Pool(Xh[va], yh[va], feature_names=self.feature_names))
                     bi = int(m.get_best_iteration() or 0) + 1
                     best.append(bi)
                     curve = m.get_evals_result()["validation"]["MAE"]
                     self.history["cat"][h][f"fold{k}"] = {"best_iteration": bi, "val_mae": float(curve[min(bi, len(curve)) - 1])}
                 n_final = max(50, int(np.median(best))) if best else 500
                 m = self._cat_model(n_final, None)
-                m.fit(Pool(Xh, yh, feature_names=self.feature_names))
+                m.fit(Pool(Xh, yh, weight=w, feature_names=self.feature_names))
                 self.cat_models[h] = m
                 self.history["cat"][h]["final_rounds"] = n_final
         if not (_HAS_LGB or _HAS_CAT):

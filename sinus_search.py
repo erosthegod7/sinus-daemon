@@ -56,7 +56,7 @@ def sample_config(rng: np.random.Generator) -> Dict[str, Any]:
         "learning_rate": float(10 ** rng.uniform(-2.3, -1.0)),        # 0.005 .. 0.10
         "num_leaves": int(rng.choice([15, 31, 63, 127])),
         "min_data_in_leaf": int(rng.choice([20, 40, 60, 120, 250])),
-        "feature_fraction": float(rng.uniform(0.4, 0.95)),
+        "feature_fraction": float(rng.uniform(0.6, 0.95)),            # floor raised: every run so far wanted it high
         "lambda_l2": float(10 ** rng.uniform(-0.5, 1.7)),             # 0.3 .. 50
         "robust_delta": float(rng.uniform(0.5, 2.5)),
         "objective": str(rng.choice(["pseudo_huber", "cauchy", "huber"])),
@@ -66,6 +66,8 @@ def sample_config(rng: np.random.Generator) -> Dict[str, Any]:
         "dropout": float(rng.uniform(0.05, 0.35)),
         "tft_lr": float(10 ** rng.uniform(-3.5, -2.3)),               # 0.0003 .. 0.005
         "lookback": int(rng.choice([30, 60, 90])),
+        # recency weighting for the trees, in sessions (0 = uniform); the search decides
+        "time_decay_halflife": float(rng.choice([0.0, 60.0, 120.0, 250.0])),
     }
 
 
@@ -77,6 +79,7 @@ def _apply(cfg: EngineConfig, p: Dict[str, Any]) -> EngineConfig:
     cfg.tree.lambda_l2 = p["lambda_l2"]
     cfg.tree.robust_delta = p["robust_delta"]
     cfg.tree.objective = p["objective"]
+    cfg.tree.time_decay_halflife = float(p.get("time_decay_halflife", 0.0))
     cfg.tft.d_model = p["d_model"]
     cfg.tft.n_heads = p["n_heads"]
     cfg.tft.dropout = p["dropout"]

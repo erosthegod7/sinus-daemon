@@ -137,6 +137,14 @@ ET, Mon–Fri, and post it in the thread. Phone push needs Remote Control paired
 Claude mobile app (`/remote-control`) AND `/config` → "Push when Claude decides"; with
 `remoteEnabled: false` in `~/.claude.json` the push tool reports "disabled".
 
+**Search upgraded (2026-09-05, evening).** Optuna TPE replaces random sampling
+(`sinus_train.install_optuna_search`): multivariate, warm-started from the board, study in
+`champion_v2/optuna.db`, the existing screen-pruner reports pruned draws to it.
+`time_decay_halflife` (recency weights for the trees; off/60/120/250 sessions) joined the
+search space; `feature_fraction` floor 0.6. `tests/test_search_tpe.py` covers both.
+The ranked techniques document is `Documents\SINUS\SINUS Training Techniques.docx`; the next
+modelling step it recommends is meta-labeling for direction.
+
 **Corrections to the brief:** prune percentile is 60, not 50; the trainer reads
 `C:\sinus\data\history` (its own cache), not `chain/`; `n_features: 0` was `_promote` reading
 attributes the scaler never had.

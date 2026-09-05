@@ -683,6 +683,138 @@ def install_champion_scaler() -> None:
 # --------------------------------------------------------------------------- #
 # 4. EVOLVE: hand the full history to the existing champion machinery
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# 3d. BAYESIAN SEARCH. Random sampling never learns from its own history; Optuna's TPE
+#     does, and is warm-started from every trial already on the board so nothing is
+#     re-discovered. The daemon's screen-pruner is untouched: pruned trials are reported to
+#     the study as pruned with their screen score, so TPE learns where the bad regions are
+#     without mistaking a short screen for a completed trial. SINUS_SEARCH=random restores
+#     the old sampler. The study persists in optuna.db next to the board.
+# --------------------------------------------------------------------------- #
+SEARCH_SPACE = {
+    "learning_rate": ("float_log", 0.005, 0.10),
+    "num_leaves": ("cat", [15, 31, 63, 127]),
+    "min_data_in_leaf": ("cat", [20, 40, 60, 120, 250]),
+    "feature_fraction": ("float", 0.60, 0.95),
+    "lambda_l2": ("float_log", 0.3, 50.0),
+    "robust_delta": ("float", 0.5, 2.5),
+    "objective": ("cat", ["pseudo_huber", "cauchy", "huber"]),
+    "d_model": ("cat", [16, 32, 64]),
+    "n_heads": ("cat", [2, 4]),
+    "dropout": ("float", 0.05, 0.35),
+    "tft_lr": ("float_log", 0.0003, 0.005),
+    "lookback": ("cat", [30, 60, 90]),
+    "time_decay_halflife": ("cat", [0.0, 60.0, 120.0, 250.0]),
+}
+
+
+def _optuna_distributions():
+    from optuna.distributions import CategoricalDistribution, FloatDistribution
+    out = {}
+    for k, (kind, *a) in SEARCH_SPACE.items():
+        out[k] = CategoricalDistribution(a[0]) if kind == "cat" else FloatDistribution(a[0], a[1], log=(kind == "float_log"))
+    return out
+
+
+def _optuna_suggest(trial) -> Dict[str, object]:
+    p = {}
+    for k, (kind, *a) in SEARCH_SPACE.items():
+        p[k] = trial.suggest_categorical(k, a[0]) if kind == "cat" else trial.suggest_float(k, a[0], a[1], log=(kind == "float_log"))
+    return p
+
+
+def _board_row_params(r, columns) -> Dict[str, object]:
+    """A board row -> params inside the search space, or ValueError. Rows written before a
+    parameter existed get that parameter's 'off' value, which is what they actually ran with."""
+    params = {}
+    for k, (kind, *a) in SEARCH_SPACE.items():
+        v = r[k] if k in columns and pd.notna(r[k]) else (0.0 if k == "time_decay_halflife" else None)
+        if v is None:
+            raise ValueError(f"{k} missing")
+        if kind == "cat":
+            choices = a[0]
+            v = type(choices[0])(v) if isinstance(choices[0], (int, float)) else str(v)
+            if v not in choices:
+                raise ValueError(f"{k}={v!r} not in space")
+        else:
+            v = float(np.clip(float(v), a[0], a[1]))
+        params[k] = v
+    return params
+
+
+def install_optuna_search(work_dir: str, storage: Optional[str] = None, seed: int = 0):
+    """Swap the daemon's random sampler for a TPE study. Returns the study, or None when
+    optuna is missing or SINUS_SEARCH=random. storage="memory" is for tests."""
+    import sinus_daemon as sd
+    if os.environ.get("SINUS_SEARCH", "tpe").lower() == "random":
+        _log("search: random (SINUS_SEARCH=random)")
+        return None
+    try:
+        import optuna
+        from optuna.trial import TrialState, create_trial
+    except ImportError:
+        _log("search: optuna not installed - random sampling (pip install optuna to enable TPE)")
+        return None
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    if storage == "memory":
+        storage = optuna.storages.InMemoryStorage()
+    elif storage is None:
+        os.makedirs(work_dir, exist_ok=True)
+        storage = "sqlite:///" + os.path.join(work_dir, "optuna.db").replace(os.sep, "/")
+    sampler = optuna.samplers.TPESampler(multivariate=True, n_startup_trials=10, seed=seed)   # pruned trials are considered by default in Optuna >= 4
+    study = optuna.create_study(study_name=f"sinus-{FEATURE_SET}", storage=storage, load_if_exists=True,
+                                direction="minimize", sampler=sampler)
+    dists, warm = _optuna_distributions(), 0
+    if not study.trials:
+        board = sd._load_board(work_dir)
+        for _, r in board.iterrows():
+            try:
+                params, st = _board_row_params(r, board.columns), str(r.get("status", ""))
+                if st == "ok" and np.isfinite(float(r["score"])):
+                    study.add_trial(create_trial(params=params, distributions=dists, value=float(r["score"])))
+                elif st == "pruned":
+                    sc = r.get("screen_score") if "screen_score" in board.columns else None
+                    iv = {0: float(sc)} if sc is not None and pd.notna(sc) and np.isfinite(float(sc)) else {}
+                    study.add_trial(create_trial(params=params, distributions=dists, state=TrialState.PRUNED, intermediate_values=iv))
+                else:
+                    continue
+                warm += 1
+            except Exception:
+                continue
+    pending: Dict[str, object] = {"trial": None}
+
+    def sample_config(rng):
+        t = study.ask()
+        pending["trial"] = t
+        return _optuna_suggest(t)
+
+    orig_save = sd._save_board
+
+    def _save_board(wd, df):
+        orig_save(wd, df)
+        t = pending["trial"]
+        if t is None or not len(df):
+            return
+        r, st = df.iloc[-1], str(df.iloc[-1].get("status", ""))
+        try:
+            if st == "ok" and np.isfinite(float(r["score"])):
+                study.tell(t, float(r["score"]))
+            elif st == "pruned":
+                sc = r.get("screen_score")
+                if sc is not None and pd.notna(sc) and np.isfinite(float(sc)):
+                    t.report(float(sc), step=0)
+                study.tell(t, state=TrialState.PRUNED)
+            else:
+                study.tell(t, state=TrialState.FAIL)
+        except Exception as e:
+            _log(f"search: could not record the trial in the study ({type(e).__name__}: {e})")
+        pending["trial"] = None
+
+    sd.sample_config, sd._save_board = sample_config, _save_board
+    _log(f"search: Optuna TPE, study '{study.study_name}', {len(study.trials)} trials known ({warm} warm-started from the board)")
+    return study
+
+
 def evolve_forever(spot_df: pd.DataFrame, chain_df: pd.DataFrame, flow_df: pd.DataFrame, work_dir: str) -> None:
     import sinus_daemon as sd
     _log(f"evolving on {len(spot_df):,} bars, {len(chain_df):,} chain rows, {len(flow_df):,} flow rows, "
@@ -721,6 +853,7 @@ def main() -> int:
     install_fresh_start()
     install_champion_scaler()
     os.makedirs(VOL, exist_ok=True)
+    install_optuna_search(os.path.join(VOL, "champion_v2"))
 
     spot_df = load_ohlcv(args.csv)
     chain_df, flow_df = build_history(spot_df, args.symbol)

@@ -70,6 +70,14 @@ trees see trajectory, not just the current bar. **v4** keeps that lag block out 
 window (`sinus.SEQUENCE_EXCLUDE`): the TFT already sees thirty bars, so lagged copies cost it
 width, epoch time and RAM for nothing. Tabular matrix 226 columns; TFT window ~121.
 
+**Search (2026-09-05).** The trainer runs Optuna's TPE (multivariate, warm-started from every
+trial on the board, persisted in `champion_v2/optuna.db`) instead of random sampling; the
+daemon's screen-pruner still kills bad draws early and reports them to the study as pruned.
+`SINUS_SEARCH=random` restores the old sampler. The trees now weight rows by session age
+(`time_decay_halflife`, in sessions — off/60/120/250, chosen by the search), and
+`feature_fraction`'s floor is 0.6 because no run ever wanted less. The reasoning and the full
+ranked list of techniques are in `Documents\SINUS\SINUS Training Techniques.docx`.
+
 A plateau where wildly different hyperparameters all score within a hair of each other, and
 one horizon is far better than naive, is a leak until proven otherwise. The check-in prompt in
 the shepherd session flags any horizon with direction accuracy above 0.80 or MAE below 0.35.
