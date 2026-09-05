@@ -94,8 +94,8 @@ a URL can run it — that is the whole workflow: ask, read the call.
 `GET /predict?brief=1` returns the phone version — one screen, in the order the desk reads
 it: horizon targets and the EOD pin, then flow (net premium z, implied move, gamma regime),
 then floor and ceiling with their GEX mass and how far the path is open each way. The full
-run is still archived. A schedule in the shepherd session fetches it every 30 minutes during
-market hours and posts it.
+run is still archived. A schedule in the shepherd session fetches it every 30 minutes from
+09:45 to 15:45 ET on trading days and posts it.
 
 ## Credentials
 

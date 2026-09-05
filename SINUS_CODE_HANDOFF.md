@@ -123,8 +123,10 @@ service in the project, polling off, the perpetual search lives only on the lapt
 Claude session with URL access can run it; the Code session does it with curl. The endpoint
 is open — `SINUS_SUBMIT_TOKEN` exists for the day that matters. `?brief=1` returns the
 phone version (`EnsembleFusionEngine.format_brief`): predictions, flow, floors/ceilings,
-path — Anthony's reading order. Session crons fetch it at :03 and :33, 09:33–15:33 ET,
-Mon–Fri, and post it in the thread; mobile push needs `/config` → mobile push enabled.
+path — Anthony's reading order. Session crons fetch it every 30 minutes from 09:45 to 15:45
+ET, Mon–Fri, and post it in the thread. Phone push needs Remote Control paired to the
+Claude mobile app (`/remote-control`) AND `/config` → "Push when Claude decides"; with
+`remoteEnabled: false` in `~/.claude.json` the push tool reports "disabled".
 
 **Corrections to the brief:** prune percentile is 60, not 50; the trainer reads
 `C:\sinus\data\history` (its own cache), not `chain/`; `n_features: 0` was `_promote` reading
