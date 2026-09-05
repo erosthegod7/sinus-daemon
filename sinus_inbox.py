@@ -111,7 +111,12 @@ def _list_inbox(gs) -> List[str]:
 
 
 def _run_model(data_path: str, work_dir: str) -> str:
-    """Run the champion and return exactly what it printed.
+    """Run the champion and return exactly what it printed. See _run_model_res."""
+    return _run_model_res(data_path, work_dir)[0]
+
+
+def _run_model_res(data_path: str, work_dir: str) -> Tuple[str, Optional[dict]]:
+    """Run the champion; return (exactly what it printed, the result dict or None on error).
 
     Falls back to the physics path on its own if no champion has been promoted  -  that
     behaviour lives in serve() and is stated in its output, so it is not second-guessed
@@ -132,21 +137,22 @@ def _run_model(data_path: str, work_dir: str) -> str:
         import sinus_daemon as sd
 
         with contextlib.redirect_stdout(buf):
-            sd.serve(SYMBOL, work_dir=work_dir)
+            res = sd.serve(SYMBOL, work_dir=work_dir)
     except Exception:
+        res = None
         buf.write("\n--- run failed ---\n")
         buf.write(traceback.format_exc())
-    return "\n".join(header) + buf.getvalue()
+    return "\n".join(header) + buf.getvalue(), res
 
 
-def predict_once(gs=None, note: str = "on demand via /predict") -> str:
+def predict_once(gs=None, note: str = "on demand via /predict", brief: bool = False) -> str:
     """The 'run my model' button. Pull the newest champion, run serve() exactly once, archive
     the output under out/ and return it as text. Nothing else happens: the service sits idle
     until the next request, and the perpetual search never runs here."""
     gs = gs or _store()
     gs._sync()
     gs.pull_champion()
-    output = _run_model(note, gs.work_dir)
+    output, res = _run_model_res(note, gs.work_dir)
     stamp = pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d_%H%M")
     out_dir = os.path.join(gs.clone_dir, OUT)
     os.makedirs(out_dir, exist_ok=True)
@@ -155,6 +161,14 @@ def predict_once(gs=None, note: str = "on demand via /predict") -> str:
     gs._commit_push(f"predict: {stamp}")
     STATE.update(last_run=str(pd.Timestamp.now(tz="America/New_York")), last_file=f"predict_{stamp}",
                  last_output=output, last_error=None)
+    if brief and isinstance(res, dict) and res:
+        # The phone version: predictions, then flow, then floors/ceilings. The full run is
+        # what got archived; this is what gets read on a screen the width of a thumb.
+        try:
+            from sinus import EnsembleFusionEngine
+            return EnsembleFusionEngine.format_brief(res) + "\n"
+        except Exception as e:
+            return output + f"\n(brief formatting failed: {type(e).__name__}: {e})\n"
     return output
 
 
@@ -254,7 +268,8 @@ def start_http_server(port: int) -> None:
                     return self._send(200, r[1])
 
                 if path == "/predict":
-                    return self._send(200, predict_once())
+                    qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+                    return self._send(200, predict_once(brief="brief=1" in qs))
 
                 if path == "/latest":
                     if not STATE["last_output"]:
@@ -272,7 +287,7 @@ def start_http_server(port: int) -> None:
                          f"last file : {STATE['last_file'] or '-'}"]
                 if STATE["last_error"]:
                     lines.append(f"last error: {STATE['last_error']}")
-                lines += ["", "routes: GET /predict (run the champion now)   POST /submit?name=<file>   GET /run  /latest  /inbox"]
+                lines += ["", "routes: GET /predict[?brief=1] (run the champion now)   POST /submit?name=<file>   GET /run  /latest  /inbox"]
                 return self._send(200, "\n".join(lines) + "\n")
             except Exception as e:
                 self._send(500, f"error: {e}\n")

@@ -1994,6 +1994,43 @@ class EnsembleFusionEngine:
         L.append(f"📌 EOD Pin Call: {r['eod']['target']:.2f}{wall}")
         return "\n".join(L)
 
+    @staticmethod
+    def format_brief(r: Dict[str, Any]) -> str:
+        """Phone-sized call in the order the desk reads it: prediction numbers first, then
+        flow, then floors and ceilings and where the path is open. One screen, no weights.
+        Handles the not-served result (weekend/holiday) and a physics-only call."""
+        m = r.get("_meta") or {}
+        if m.get("served") is False:
+            return f"no call — {m.get('reason', 'not served')}" + (f" · {m['ladder_error']}" if m.get("ladder_error") else "")
+        p = r.get("_physics") or {}
+        hs = [h for h in HORIZONS if h in r]
+        ch = m.get("champion") or {}
+        ex = [k for k in ("lgb", "cat", "tft") if hs and np.isfinite(r[hs[0]].get("experts", {}).get(k, np.nan))]
+        who = f"trial {ch.get('trial')} · {' '.join(ex) or 'no experts'}" if ch else "physics-only"
+        ts = pd.Timestamp(m["timestamp"]).strftime("%H:%M") if m.get("timestamp") else "--:--"
+        L = [f"SPY {m['spot']:.2f} · {ts} ET · {m['minutes_to_close']:.0f}m to close · {who}"]
+        for h in hs:
+            d = r[h]
+            arrow = "▲" if d["direction"] > 0 else ("▼" if d["direction"] < 0 else "■")
+            L.append(f"{h:>3} {d['target']:.2f} {arrow} {d['delta']:+.2f}  c{d['confidence']:.2f}")
+        pin = p.get("pin_strike", np.nan)
+        L.append(f"EOD {r['eod']['target']:.2f}" + (f" · pin {pin:.2f} pull {p.get('pin_strength', np.nan):.2f}" if np.isfinite(pin) else "")
+                 if "eod" in r else "EOD —")
+        im = m.get("implied_move")
+        L.append(f"flow: net prem z {float(m.get('net_prem_z') or 0.0):+.2f}"
+                 + (f" · implied ±{im:.2f}" if im is not None and np.isfinite(im) else "")
+                 + f" · {str(p.get('regime', '?')).replace('_', ' ')}")
+
+        def _g(x: float) -> str:
+            return "?" if not np.isfinite(x) else (f"{x / 1e9:.1f}B" if abs(x) >= 1e9 else f"{x / 1e6:.0f}M")
+        fl, ce = float(p.get("wall_below", np.nan)), float(p.get("wall_above", np.nan))
+        if np.isfinite(fl) and np.isfinite(ce):
+            L.append(f"floor {fl:.2f} (gex {_g(p.get('wall_below_gex', np.nan))}) · ceiling {ce:.2f} (gex {_g(p.get('wall_above_gex', np.nan))})")
+            L.append(f"path open {m['spot'] - fl:.2f} down · {ce - m['spot']:.2f} up · zero-γ {p.get('zero_gamma_level', np.nan):.2f} · max pain {p.get('max_pain', np.nan):.2f}")
+        else:
+            L.append(f"floor/ceiling: no walls resolved · zero-γ {p.get('zero_gamma_level', np.nan):.2f} · max pain {p.get('max_pain', np.nan):.2f}")
+        return "\n".join(L)
+
 
 # ============================================================================= #
 # PHASE 4 — FEEDS, BUFFER, EXECUTION, LIVE ENGINE, BACKTESTER

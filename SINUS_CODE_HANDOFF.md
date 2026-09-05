@@ -121,7 +121,10 @@ pulls the newest champion, runs one call on live data, archives it to `out/predi
 and returns it. No inbox file needed. The service never runs the model unprompted (one
 service in the project, polling off, the perpetual search lives only on the laptop). Any
 Claude session with URL access can run it; the Code session does it with curl. The endpoint
-is open — `SINUS_SUBMIT_TOKEN` exists for the day that matters.
+is open — `SINUS_SUBMIT_TOKEN` exists for the day that matters. `?brief=1` returns the
+phone version (`EnsembleFusionEngine.format_brief`): predictions, flow, floors/ceilings,
+path — Anthony's reading order. Session crons fetch it at :03 and :33, 09:33–15:33 ET,
+Mon–Fri, and post it in the thread; mobile push needs `/config` → mobile push enabled.
 
 **Corrections to the brief:** prune percentile is 60, not 50; the trainer reads
 `C:\sinus\data\history` (its own cache), not `chain/`; `n_features: 0` was `_promote` reading

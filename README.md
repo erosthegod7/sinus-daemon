@@ -91,6 +91,12 @@ output is archived under `out/` in the champion repo and `GET /latest` returns t
 recent one. On a weekend or holiday it says so in one line. Any Claude session that can fetch
 a URL can run it — that is the whole workflow: ask, read the call.
 
+`GET /predict?brief=1` returns the phone version — one screen, in the order the desk reads
+it: horizon targets and the EOD pin, then flow (net premium z, implied move, gamma regime),
+then floor and ceiling with their GEX mass and how far the path is open each way. The full
+run is still archived. A schedule in the shepherd session fetches it every 30 minutes during
+market hours and posts it.
+
 ## Credentials
 
 No launcher stores a key. `POLYGON_KEY`, `SINUS_GIT_REPO` and `SINUS_GIT_TOKEN` are read from

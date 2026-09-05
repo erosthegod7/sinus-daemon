@@ -48,12 +48,12 @@ def main():
     ok = True
     root = tempfile.mkdtemp(prefix="sinus_inbox_")
     handed = []
-    orig_run = sinus_inbox._run_model
+    orig_run = sinus_inbox._run_model_res
     try:
         gs = _Store(root)
         with open(os.path.join(gs.clone_dir, sinus_inbox.INBOX, "SINUS_2026-09-05_1000.md"), "w") as fh:
             fh.write("extraction")
-        sinus_inbox._run_model = lambda path, work: handed.append(work) or "stub output"
+        sinus_inbox._run_model_res = lambda path, work: handed.append(work) or ("stub output", None)
 
         res = sinus_inbox.process_once(gs=gs)
 
@@ -74,7 +74,7 @@ def main():
         ok &= check("archived under out/predict_<stamp>.txt", len(outs) == 1, str(outs))
         ok &= check("/latest would show it", sinus_inbox.STATE.get("last_output") == "stub output")
     finally:
-        sinus_inbox._run_model = orig_run
+        sinus_inbox._run_model_res = orig_run
         shutil.rmtree(root, ignore_errors=True)
 
     print("\n" + ("ALL PASS" if ok else "FAILURES ABOVE"))
