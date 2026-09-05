@@ -56,7 +56,9 @@ $extra = ""
 if ($Build) { $extra = " --build" }
 
 # cmd does the stderr merge: PowerShell 5.1 would wrap every stderr line in an ErrorRecord.
-cmd /c "python -u sinus_train.py$extra 2>&1" | Tee-Object -FilePath $log
+# Written line by line as UTF-8, not via Tee-Object — which in 5.1 writes UTF-16 and makes
+# the log unreadable to tail/grep, i.e. to the watcher that is the whole point of this file.
+cmd /c "python -u sinus_train.py$extra 2>&1" | ForEach-Object { $_; Add-Content -Path $log -Value $_ -Encoding UTF8 }
 
 if ($script:KeepAwake) { [void][Win32.Power]::SetThreadExecutionState([uint32]2147483648) }
 Write-Host "trainer exited - log is $log"
