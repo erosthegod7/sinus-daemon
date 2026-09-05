@@ -91,6 +91,22 @@ def main():
     print("3. the engine's own verify_causality agrees (multi-day form)")
     ok &= check("verify_causality passes", verify_causality(pipe, spot, chain, flow, cut_minutes=120))
 
+    print("4. the lag block reaches the trees but stays out of the TFT window")
+    from sinus import TrainingBundle
+    import re
+    b = TrainingBundle.from_phase1(out, "train", lookback=30)
+    is_lag = lambda c: re.search(r"_d\d+m$|^ret_(10|20|25|40|50)m$", c) is not None  # noqa: E731
+    n_lag_tab = sum(is_lag(c) for c in b.feature_names)
+    ok &= check("tabular matrix carries the lag block", n_lag_tab >= 100, f"{n_lag_tab} lag columns in X")
+    ok &= check("sequence names exclude every lag column",
+                b.seq_feature_names is not None and not any(is_lag(c) for c in b.seq_feature_names),
+                f"{len(b.seq_feature_names or [])} window columns")
+    ok &= check("X_seq width == sequence names", b.seq["X_seq"].shape[2] == len(b.seq_feature_names),
+                f"{b.seq['X_seq'].shape[2]} vs {len(b.seq_feature_names)}")
+    ok &= check("window is narrower than the tabular matrix by exactly the lag block",
+                b.X.shape[1] - b.seq["X_seq"].shape[2] == n_lag_tab,
+                f"X {b.X.shape[1]} − seq {b.seq['X_seq'].shape[2]} = {b.X.shape[1] - b.seq['X_seq'].shape[2]}")
+
     print("\n" + ("ALL PASS" if ok else "FAILURES ABOVE"))
     return 0 if ok else 1
 

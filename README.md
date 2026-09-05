@@ -63,10 +63,12 @@ desk, not for overnight. The trainer is `sinus_train.py`; it owns the feature co
 *current* day's close-to-close return, joined onto every bar of that day. Ablating that one
 column dropped eod direction accuracy from 0.94 to 0.33. Two volume features in the trainer were
 also full-session aggregates. All three are fixed, `tests/test_causality.py` proves the whole
-matrix causal, and nothing tagged `v2` is comparable to anything tagged `v3`. v3 also adds
-Black-Scholes vanna/charm (five features that were NaN) and a lag block — price returns at nine
-lags and the change over six windows for sixteen option-book state variables — so the trees see
-trajectory, not just the current bar.
+matrix causal, and nothing tagged `v2` is comparable to anything tagged `v3` or later. v3 also
+added Black-Scholes vanna/charm (five features that were NaN) and a lag block — price returns at
+nine lags and the change over six windows for sixteen option-book state variables — so the
+trees see trajectory, not just the current bar. **v4** keeps that lag block out of the TFT's
+window (`sinus.SEQUENCE_EXCLUDE`): the TFT already sees thirty bars, so lagged copies cost it
+width, epoch time and RAM for nothing. Tabular matrix 226 columns; TFT window ~121.
 
 A plateau where wildly different hyperparameters all score within a hair of each other, and
 one horizon is far better than naive, is a leak until proven otherwise. The check-in prompt in

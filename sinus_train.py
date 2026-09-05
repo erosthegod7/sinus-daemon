@@ -531,6 +531,10 @@ def install_extra_features() -> None:
         return meta, feats, targets
 
     FP._engineer = _engineer
+    # The lag block is for the trees. Keep it out of the TFT window, which already sees the
+    # bars the lags were computed from: 226 -> ~121 columns per timestep, and the epoch time
+    # and RAM that go with it.
+    sinus.SEQUENCE_EXCLUDE = r"_d\d+m$|^ret_(10|20|25|40|50)m$"
     FP._sinus_train_patched = True
 
 
@@ -545,7 +549,9 @@ def install_extra_features() -> None:
 # v3 (2026-09-05): hist_prior_ret, vol_ratio_session and vol_cum_frac were lookahead; fixed.
 # Nothing tagged v2 is comparable to anything tagged v3 — its scores were measured against
 # a matrix that contained the answer.
-FEATURE_SET = "v3"
+# v4 (2026-09-05): the lag block no longer enters the TFT window (trees only), so a v3
+# champion's tft.pt has the wrong input width for this code. Tabular matrix unchanged.
+FEATURE_SET = "v4"
 
 
 def install_fresh_start() -> None:

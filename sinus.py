@@ -709,6 +709,10 @@ class FeatureScaler:
 
 STATIC_COVARIATES = ["dow", "hist_prior_ret", "hist_prior_range_pct", "hist_gap_pct"]
 KNOWN_FUTURE = ["minutes_to_close", "session_frac", "session_sin", "session_cos"]
+# Regex of feature columns kept OUT of the TFT window. The trees see one row, so lag/delta
+# columns are how they see trajectory; the TFT already sees `lookback` bars, so lagged copies
+# only add width, epoch time and RAM. The trainer sets this for its lag block. None = all.
+SEQUENCE_EXCLUDE: Optional[str] = None
 
 
 @dataclass
@@ -731,7 +735,12 @@ class PipelineOutput:
     def sequences(self, split: str, lookback: int = 60, target_kind: str = "retn") -> Dict[str, np.ndarray]:
         """Sliding windows that never cross a session. X_seq (N,L,F), X_static (N,S), X_known (N,H,K), Y (N,H), row_idx (N,)."""
         m = self.masks[split]
-        F = self.features.to_numpy(dtype=self.cfg.dtype)
+        seq_cols = list(self.features.columns)
+        if SEQUENCE_EXCLUDE:
+            import re as _re
+            _pat = _re.compile(SEQUENCE_EXCLUDE)
+            seq_cols = [c for c in seq_cols if not _pat.search(c)]
+        F = self.features[seq_cols].to_numpy(dtype=self.cfg.dtype)
         cols = [f"y_{target_kind}_{h}" for h in self.cfg.horizon_names()]
         Yall = self.targets[cols].to_numpy(dtype=self.cfg.dtype)
         static_all = np.nan_to_num(self.features_raw.reindex(columns=STATIC_COVARIATES).to_numpy(dtype=self.cfg.dtype))
@@ -756,11 +765,11 @@ class PipelineOutput:
         H, S, Kn = len(cols), len(STATIC_COVARIATES), len(KNOWN_FUTURE)
         if not Xs:
             return {"X_seq": np.zeros((0, lookback, F.shape[1]), self.cfg.dtype), "X_static": np.zeros((0, S), self.cfg.dtype),
-                    "X_known": np.zeros((0, H, Kn), self.cfg.dtype), "Y": np.zeros((0, H), self.cfg.dtype), "row_idx": np.zeros(0, int)}
+                    "X_known": np.zeros((0, H, Kn), self.cfg.dtype), "Y": np.zeros((0, H), self.cfg.dtype), "row_idx": np.zeros(0, int), "past_names": seq_cols}
         out = {"X_seq": np.concatenate(Xs).astype(self.cfg.dtype), "X_static": np.concatenate(Ss).astype(self.cfg.dtype),
                "X_known": np.concatenate(Ks).astype(self.cfg.dtype), "Y": np.concatenate(Ys).astype(self.cfg.dtype),
-               "row_idx": np.concatenate(idx)}
-        assert out["X_seq"].shape[2] == self.features.shape[1], "TFT feature axis must equal tabular feature count"
+               "row_idx": np.concatenate(idx), "past_names": seq_cols}
+        assert out["X_seq"].shape[2] == len(seq_cols), "TFT feature axis must match the sequence column subset"
         assert out["X_known"].shape[1:] == (H, Kn) and out["Y"].shape[1] == H, "horizon axis mismatch"
         return out
 
@@ -952,6 +961,9 @@ class TrainingBundle:
     # Carried on the bundle rather than looked up at the call site so a scorer
     # that masks by time of day cannot be handed timestamps from a different split.
     ts: Optional[pd.Series] = None
+    # Columns of seq["X_seq"] when the window uses a subset of the tabular matrix
+    # (SEQUENCE_EXCLUDE). None means the full feature list.
+    seq_feature_names: Optional[List[str]] = None
     static_names: List[str] = field(default_factory=lambda: list(STATIC_COVARIATES) + ["is_monthly_opex", "is_quad_witching"])
     known_names: List[str] = field(default_factory=lambda: list(KNOWN_FUTURE))
 
@@ -961,9 +973,10 @@ class TrainingBundle:
         X, Y, row_idx = out.tabular_multi(split, target_kind)
         sess = pd.DatetimeIndex(out.meta["session_date"].iloc[row_idx])
         groups = sess.tz_convert("UTC").tz_localize(None).asi8 if sess.tz is not None else sess.asi8
-        seq = None
+        seq, seq_names = None, None
         if with_sequences:
             seq = out.sequences(split, lookback=lookback, target_kind=target_kind)
+            seq_names = seq.pop("past_names")
             sd = pd.DatetimeIndex(out.meta["session_date"].iloc[seq["row_idx"]]) if len(seq["row_idx"]) else pd.DatetimeIndex([])
             tf = _is_third_friday(sd).astype(np.float32)
             qw = (tf.astype(bool) & np.asarray(sd.month.isin([3, 6, 9, 12]))).astype(np.float32)
@@ -971,7 +984,7 @@ class TrainingBundle:
             seq["groups"] = (sd.tz_convert("UTC").tz_localize(None).asi8 if sd.tz is not None else sd.asi8) if len(sd) else np.zeros(0, np.int64)
         b = cls(X=X.astype(np.float32), Y=Y.astype(np.float32), groups=np.asarray(groups, np.int64), row_idx=np.asarray(row_idx, int),
                 feature_names=list(out.features.columns), seq=seq,
-                ts=out.meta["ts"].iloc[row_idx].reset_index(drop=True))
+                ts=out.meta["ts"].iloc[row_idx].reset_index(drop=True), seq_feature_names=seq_names)
         log_shapes(f"phase2.bundle[{split}]", X=b.X, Y=b.Y, **{f"seq_{k}": v for k, v in (seq or {}).items()})
         return b
 
@@ -1507,7 +1520,7 @@ class CoreModelingEngine:
         log_shapes("phase2.fit", X=b.X, Y=b.Y, **{f"seq_{k}": v for k, v in (b.seq or {}).items()})
         self.trees.fit(b.X, b.Y, b.groups, self.feature_names)
         if b.seq is not None and _HAS_TORCH and len(b.seq["X_seq"]):
-            self.deep.fit(b.seq, np.asarray(b.seq["groups"]), self.feature_names, b.static_names, b.known_names)
+            self.deep.fit(b.seq, np.asarray(b.seq["groups"]), b.seq_feature_names or self.feature_names, b.static_names, b.known_names)
         else:
             log.warning("TFT not trained (no sequences or no torch)", extra={"event": "tft_skipped"})
         self.fitted = True

@@ -150,9 +150,12 @@ def process_once(gs=None) -> Optional[Tuple[str, str]]:
     if len(files) > 1:
         _log(f"{len(files)} files in inbox; running {target}, archiving the rest unrun")
 
-    work = os.path.join(VOL, "champion")
-    os.makedirs(work, exist_ok=True)
     gs.pull_champion()                      # newest weights the other node promoted
+    # serve() resolves <work_dir>/champion/champion.json, and pull_champion() writes to
+    # <gitstore work_dir>/champion — so the directory handed on MUST be the store's own.
+    # It used to be VOL/champion, one level off: the champion was pulled on every run and
+    # never found, and every call this service ever made was physics-only.
+    work = gs.work_dir
 
     src = os.path.join(gs.clone_dir, INBOX, target)
     _log(f"running {target}")

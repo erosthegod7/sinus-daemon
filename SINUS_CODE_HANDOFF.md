@@ -48,8 +48,14 @@ is still holding and the trial-18 v2 one in `sinus-champion/champion/`.
   change over 5/10/15/20/30/50m for sixteen option-book state variables. 105 columns, causal.
 - Flow `side` relabelled ask/bid (the builder wrote buy/sell, the engine keyed on ask/bid, so
   `block_signed_bias` was zero on all 500 sessions).
-- v3 matrix: 202 raw + 24 `__isna` = 226 columns, 10 dead, all of them constants or
-  OI-dependent. Train `X_seq` ≈ 3 GB at 500 sessions, lookback 30.
+- v3 matrix: 202 raw + 24 `__isna` = 226 columns, 9 dead, all of them constants or
+  OI-dependent.
+- **v4 (same day):** the first v3 run showed TFT epochs of ~170 s — the 105 lag columns were
+  going into the sequence window too, where they carry nothing the window does not already
+  hold. `sinus.SEQUENCE_EXCLUDE` (set by `install_extra_features`) keeps them out: tabular
+  matrix unchanged at 226, TFT window ~121, train `X_seq` ≈ 1.6 GB instead of 3. A v3
+  champion's `tft.pt` has the wrong input width for v4 code, hence the bump; `serve()` refuses
+  it like anything else that is not the current set.
 - `champion.json` now carries `scoring_version` and a real `n_features` (Task 4 both parts);
   `push_champion` refuses to compare across scoring versions.
 
