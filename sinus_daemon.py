@@ -417,7 +417,13 @@ def serve(symbol: str = "SPY", work_dir: str = "champion", spot: Optional[float]
     # (no 0DTE expiry), and a run that dies there must still have recorded why it was not
     # a champion call in the first place.
     print(f"[serve] physics-only ({why})")
-    lad, spot_px, _ = fetch_snapshot_ladder(symbol, spot=spot)
+    try:
+        lad, spot_px, _ = fetch_snapshot_ladder(symbol, spot=spot)
+    except Exception as e:
+        # No ladder means no 0DTE expiry today — a weekend or a holiday. There is nothing to
+        # fuse; say so in one line rather than leaving a traceback in the archive.
+        print(f"[serve] no options ladder ({type(e).__name__}: {e}) — market closed? nothing to serve")
+        return {"_meta": {"served": False, "reason": why, "ladder_error": str(e)}}
     now = pd.Timestamp.now(tz="America/New_York")
     mtc = max((now.normalize() + pd.Timedelta(hours=16) - now).total_seconds() / 60.0, 0.0)
     st = market_state_from_polygon(lad, spot_px, mtc)

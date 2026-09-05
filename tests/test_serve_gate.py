@@ -77,6 +77,20 @@ def main():
         res, out = run()
         ok &= check("predict_live entered with the champion dir", calls == [champ], str(calls))
         ok &= check("live result returned", res.get("_live") is True)
+
+        print("4. market closed: no options ladder exists")
+        os.remove(os.path.join(champ, "champion.json"))
+
+        def _no_ladder(*a, **k):
+            raise RuntimeError("no contracts for SPY 2026-09-05 - holiday, or no expiry that date")
+        sd.fetch_snapshot_ladder = _no_ladder
+        try:
+            res, out = run()
+            ok &= check("returns instead of raising", isinstance(res, dict) and res.get("_meta", {}).get("served") is False)
+            ok &= check("says so in one line", "no options ladder" in out and "Traceback" not in out,
+                        [l for l in out.splitlines() if "ladder" in l][0][:80])
+        except Exception as e:
+            ok &= check("returns instead of raising", False, f"raised {type(e).__name__}")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

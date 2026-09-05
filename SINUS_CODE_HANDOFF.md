@@ -97,6 +97,20 @@ The trainer's log lost its lines from 11:13:45 to ~11:30 — a `tail -F` watcher
 and every `Add-Content` failed. `run_train.ps1` now retries the append; the watcher polls
 instead of holding a handle. The leaderboard is the ground truth for progress regardless.
 
+**First honest champion — trial 0, promoted 12:06 ET, on GitHub.** feature_set v4,
+n_features 251, scoring_version eod_pre11, pipeline.pkl + trees + tft in `champion/`.
+Test 0.637, direction 0.52, per-horizon accuracy 0.46–0.51 — coin-flip, which is what the
+truth looks like at trial 0 without a leak, and the first score this project ever produced
+that a config can actually beat. 22 min for the heaviest draw in the space (d_model 64,
+lookback 60). The leaky v2 champion scored 0.491 / 0.69; do not read that as better.
+
+**Railway proven to the edge of the market calendar.** Probe at 12:10 ET, Saturday:
+`[live] champion trial 0 ran on bar 2026-09-04 16:00 · 251 features · experts ['lgb', 'cat',
+'tft_q50']` — champion loaded, live window from Polygon, the champion's own scaler, all
+three experts. It then failed only because no 0DTE expiry exists on a Saturday. Found on the
+way: the STOCK aggregates on this key are rate-limited to a few calls a minute — the context
+window is now one range request (`fetch_polygon_range`) instead of one per session.
+
 **Corrections to the brief:** prune percentile is 60, not 50; the trainer reads
 `C:\sinus\data\history` (its own cache), not `chain/`; `n_features: 0` was `_promote` reading
 attributes the scaler never had.
