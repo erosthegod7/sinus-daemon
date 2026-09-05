@@ -78,6 +78,15 @@ default; `cache` restores the old snapshot-logger path; `SINUS_USE_CHAIN=0` disa
 `main` is now based on `origin/main` (ref move only). Secrets are out of every launcher and
 in the Windows user environment; `.gitignore` and `.gitattributes` added.
 
+**Scheduling, corrected 2026-09-05 16:55.** Session crons (`CronCreate`) missed every firing
+in the desktop-app session (12:23, 14:23, 15:15, 15:20). All schedules now live in the app's
+persistent scheduler (`~/.claude/scheduled-tasks/`): `sinus-shepherd-checkin` (2-hourly at
+:15), `sinus-call-open` (09:45), `sinus-call-halfhour` (:15/:45, 10–15), `sinus-live-probe-tue`
+(one-shot). Each run is a fresh session and pushes its first line to the phone. The log
+watcher (a `Monitor`, which does wake the session) emits lines beginning `PUSH: ` for a new
+champion (per-horizon accuracy vs the previous one, via `champion_push.py` in the session
+scratchpad) and for crashes; any such line is forwarded verbatim with `PushNotification`.
+
 **Unattended runs.** `run_train.ps1` (sleep suppressed, everything logged to
 `C:\sinus\data\train_<stamp>.log`). A 2-hour check-in runs in the Code session; its prompt
 stops the trainer if any horizon's direction accuracy exceeds 0.80 or MAE drops below 0.35.
