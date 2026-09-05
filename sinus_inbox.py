@@ -41,6 +41,8 @@
 #                                anywhere except this service's own token.
 #     /           status: inbox contents, last run, champion in use
 #     /run        process the inbox right now, return the raw output as text/plain
+#     /predict    run the champion NOW with no inbox file - the 'run my model' button.
+#                 Pulls the newest champion, runs one call, archives it to out/, returns it.
 #     /latest     the most recent raw output
 #     /inbox      what is currently waiting
 
@@ -135,6 +137,25 @@ def _run_model(data_path: str, work_dir: str) -> str:
         buf.write("\n--- run failed ---\n")
         buf.write(traceback.format_exc())
     return "\n".join(header) + buf.getvalue()
+
+
+def predict_once(gs=None, note: str = "on demand via /predict") -> str:
+    """The 'run my model' button. Pull the newest champion, run serve() exactly once, archive
+    the output under out/ and return it as text. Nothing else happens: the service sits idle
+    until the next request, and the perpetual search never runs here."""
+    gs = gs or _store()
+    gs._sync()
+    gs.pull_champion()
+    output = _run_model(note, gs.work_dir)
+    stamp = pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d_%H%M")
+    out_dir = os.path.join(gs.clone_dir, OUT)
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, f"predict_{stamp}.txt"), "w") as fh:
+        fh.write(output)
+    gs._commit_push(f"predict: {stamp}")
+    STATE.update(last_run=str(pd.Timestamp.now(tz="America/New_York")), last_file=f"predict_{stamp}",
+                 last_output=output, last_error=None)
+    return output
 
 
 def process_once(gs=None) -> Optional[Tuple[str, str]]:
@@ -232,6 +253,9 @@ def start_http_server(port: int) -> None:
                         return self._send(200, "inbox is empty  -  nothing to run\n")
                     return self._send(200, r[1])
 
+                if path == "/predict":
+                    return self._send(200, predict_once())
+
                 if path == "/latest":
                     if not STATE["last_output"]:
                         return self._send(404, "no run yet\n")
@@ -248,7 +272,7 @@ def start_http_server(port: int) -> None:
                          f"last file : {STATE['last_file'] or '-'}"]
                 if STATE["last_error"]:
                     lines.append(f"last error: {STATE['last_error']}")
-                lines += ["", "routes: POST /submit?name=<file>   GET /run  /latest  /inbox"]
+                lines += ["", "routes: GET /predict (run the champion now)   POST /submit?name=<file>   GET /run  /latest  /inbox"]
                 return self._send(200, "\n".join(lines) + "\n")
             except Exception as e:
                 self._send(500, f"error: {e}\n")

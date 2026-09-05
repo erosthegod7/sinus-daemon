@@ -116,6 +116,13 @@ book build is fine. A market-closed call now ends in one line, not a traceback. 
 when the call uses the last one — 2 min 45 s of CPU inference on Railway; it now predicts
 the one bar being called. Expect a live call to take well under a minute.
 
+**Running the model on demand.** `GET https://sinus-inbox-production.up.railway.app/predict`
+pulls the newest champion, runs one call on live data, archives it to `out/predict_<stamp>.txt`
+and returns it. No inbox file needed. The service never runs the model unprompted (one
+service in the project, polling off, the perpetual search lives only on the laptop). Any
+Claude session with URL access can run it; the Code session does it with curl. The endpoint
+is open — `SINUS_SUBMIT_TOKEN` exists for the day that matters.
+
 **Corrections to the brief:** prune percentile is 60, not 50; the trainer reads
 `C:\sinus\data\history` (its own cache), not `chain/`; `n_features: 0` was `_promote` reading
 attributes the scaler never had.

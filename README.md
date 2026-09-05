@@ -74,6 +74,23 @@ A plateau where wildly different hyperparameters all score within a hair of each
 one horizon is far better than naive, is a leak until proven otherwise. The check-in prompt in
 the shepherd session flags any horizon with direction accuracy above 0.80 or MAE below 0.35.
 
+## Running it on demand
+
+The Railway service (`sinus-inbox`) never runs the model on its own — polling is off and it
+idles on a socket. One request runs the current champion once on live Polygon data and
+returns the call as text:
+
+```bash
+curl https://sinus-inbox-production.up.railway.app/predict
+```
+
+It pulls the newest champion from `sinus-champion` first, so the answer always comes from
+the latest promoted weights and their scaler; live bars come from Polygon in one request and
+today's option book is built through the same builder the champion was trained on. The
+output is archived under `out/` in the champion repo and `GET /latest` returns the most
+recent one. On a weekend or holiday it says so in one line. Any Claude session that can fetch
+a URL can run it — that is the whole workflow: ask, read the call.
+
 ## Credentials
 
 No launcher stores a key. `POLYGON_KEY`, `SINUS_GIT_REPO` and `SINUS_GIT_TOKEN` are read from

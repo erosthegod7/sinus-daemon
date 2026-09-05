@@ -64,6 +64,15 @@ def main():
                     handed[0] if handed else "")
         ok &= check("inbox is empty afterwards",
                     not [f for f in os.listdir(os.path.join(gs.clone_dir, sinus_inbox.INBOX)) if f != ".gitkeep"])
+
+        print("2. /predict: run the champion with nothing in the inbox")
+        text = sinus_inbox.predict_once(gs=gs)
+        ok &= check("returns the run output", text == "stub output", repr(text)[:40])
+        ok &= check("handed serve() the store's work_dir (champion present)",
+                    len(handed) == 2 and os.path.exists(os.path.join(handed[1], "champion", "champion.json")))
+        outs = [f for f in os.listdir(os.path.join(gs.clone_dir, sinus_inbox.OUT)) if f.startswith("predict_")]
+        ok &= check("archived under out/predict_<stamp>.txt", len(outs) == 1, str(outs))
+        ok &= check("/latest would show it", sinus_inbox.STATE.get("last_output") == "stub output")
     finally:
         sinus_inbox._run_model = orig_run
         shutil.rmtree(root, ignore_errors=True)
